@@ -1,0 +1,365 @@
+/**
+ * GrantComply AI Assistant - Google Docs Add-on
+ * 
+ * This add-on provides AI-powered assistance for grant writing and document review.
+ * It connects to the GrantComply backend API to provide intelligent suggestions.
+ */
+
+// Configuration - Update these for your deployment
+const CONFIG = {
+  API_BASE_URL: 'https://tours-poor-sword-glory.trycloudflare.com', // Your Cloudflare tunnel URL
+  APP_NAME: 'GrantComply AI Assistant',
+  VERSION: '1.0.0'
+};
+const API_BASE_URL = 'http://localhost:8000';
+const GOOGLE_CLIENT_ID = '134720547219-bqof9sbkq53kr3rsrhhl4ddnl2vdglg8.apps.googleusercontent.com';
+
+/**
+ * Called when the add-on is installed or when a document is opened
+ */
+function onInstall(e) {
+  onOpen(e);
+}
+
+/**
+ * Called when a document is opened
+ */
+function onOpen(e) {
+  DocumentApp.getUi()
+    .createAddonMenu()
+    .addItem('Open AI Assistant', 'showSidebar')
+    .addItem('Settings', 'showSettings')
+    .addToUi();
+}
+
+/**
+ * Homepage trigger for the add-on
+ */
+function onHomepage(e) {
+  return createHomepageCard();
+}
+
+/**
+ * Docs-specific homepage trigger
+ */
+function onDocsHomepage(e) {
+  return createHomepageCard();
+}
+
+/**
+ * Called when file scope is granted
+ */
+function onFileScopeGranted(e) {
+  return createHomepageCard();
+}
+
+/**
+ * Create the homepage card
+ */
+function createHomepageCard() {
+  const card = CardService.newCardBuilder()
+    .setHeader(CardService.newCardHeader()
+      .setTitle(CONFIG.APP_NAME)
+      .setSubtitle('AI-powered grant writing assistant')
+      .setImageUrl('https://via.placeholder.com/128x128.png?text=GC'))
+    .addSection(CardService.newCardSection()
+      .addWidget(CardService.newTextParagraph()
+        .setText('Welcome to GrantComply AI Assistant! Click the button below to start getting AI-powered suggestions for your document.'))
+      .addWidget(CardService.newButtonSet()
+        .addButton(CardService.newTextButton()
+          .setText('Open AI Assistant')
+          .setOnClickAction(CardService.newAction()
+            .setFunctionName('showSidebar')))))
+    .build();
+  
+  return [card];
+}
+
+/**
+ * Show the main AI assistant sidebar
+ */
+function showSidebar() {
+  try {
+    const html = HtmlService.createTemplateFromFile('sidebar')
+      .evaluate()
+      .setTitle(CONFIG.APP_NAME)
+      .setWidth(350);
+    
+    DocumentApp.getUi().showSidebar(html);
+  } catch (error) {
+    console.error('Error showing sidebar:', error);
+    DocumentApp.getUi().alert('Error opening AI Assistant: ' + error.toString());
+  }
+}
+
+/**
+ * Show settings dialog
+ */
+function showSettings() {
+  const html = HtmlService.createTemplateFromFile('settings')
+    .evaluate()
+    .setWidth(400)
+    .setHeight(300);
+  
+  DocumentApp.getUi().showModalDialog(html, 'Settings');
+}
+
+/**
+ * Get user authentication status (simplified for testing)
+ */
+function getUserAuthStatus() {
+  try {
+    const userEmail = Session.getActiveUser().getEmail();
+
+    return {
+      success: true,
+      authenticated: true,
+      email: userEmail,
+      userId: 'test-user'
+    };
+  } catch (error) {
+    console.error('Error getting auth status:', error);
+    return {
+      success: false,
+      authenticated: false,
+      email: 'Error',
+      userId: 'Error',
+      error: error.toString()
+    };
+  }
+}
+
+/**
+ * Clear authentication cache (simplified for testing)
+ */
+function clearAuthCache() {
+  return {
+    success: true,
+    message: 'No cache to clear (testing mode)'
+  };
+}
+
+/**
+ * Get user ID (simplified for testing)
+ */
+function getUserId() {
+  // Return a test user ID for now
+  return 'test-user';
+}
+
+/**
+ * Send question to AI and get response
+ */
+function askAI(question, context = '') {
+  try {
+    const payload = {
+      question: question,
+      user_id: 'test-user',
+      context: context
+    };
+    
+    const options = {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      payload: JSON.stringify(payload)
+    };
+    
+    const response = UrlFetchApp.fetch(CONFIG.API_BASE_URL + '/v1/ai/chat', options);
+    const responseData = JSON.parse(response.getContentText());
+    
+    if (!responseData.success) {
+      throw new Error('AI request failed: ' + responseData.response);
+    }
+    
+    return {
+      success: true,
+      response: responseData.response
+    };
+    
+  } catch (error) {
+    console.error('Error calling AI API:', error);
+    return {
+      success: false,
+      error: error.toString()
+    };
+  }
+}
+
+/**
+ * Create a real Google Docs comment using Drive API with proper formatting
+ */
+function createComment(commentText, anchorText = null) {
+  try {
+    const doc = DocumentApp.getActiveDocument();
+    const docId = doc.getId();
+    const body = doc.getBody();
+
+    // Format the comment content
+    const formattedComment = '🤖 AI Assistant Suggestion\n\n' + commentText + '\n\n---\nGenerated by GrantComply AI Assistant';
+
+    console.log('Creating comment for document:', docId);
+
+    // Create the basic comment resource
+    const commentResource = {
+      content: formattedComment
+    };
+
+    // Try to add anchor information if we have selected text
+    if (anchorText && anchorText.trim()) {
+      try {
+        const searchResult = body.findText(anchorText);
+        if (searchResult) {
+          const element = searchResult.getElement();
+          const startOffset = searchResult.getStartOffset();
+          const endOffset = searchResult.getEndOffsetInclusive();
+
+          // Calculate absolute position in the document
+          const docText = body.getText();
+          const elementText = element.asText().getText();
+          const elementStart = docText.indexOf(elementText);
+
+          if (elementStart >= 0) {
+            const absoluteStart = elementStart + startOffset;
+            const absoluteEnd = elementStart + endOffset;
+
+            // Add anchor information in the format Drive API expects
+            commentResource.anchor = {
+              r: 'head',
+              a: [{
+                txt: {
+                  ts: absoluteStart,
+                  te: absoluteEnd + 1,
+                  ml: []
+                }
+              }]
+            };
+
+            console.log('Adding anchor for text:', anchorText.substring(0, 50));
+          }
+        }
+      } catch (anchorError) {
+        console.log('Could not create anchor, creating unanchored comment:', anchorError);
+      }
+    }
+
+    // Try to create the comment using Drive API
+    try {
+      console.log('Attempting to create comment with Drive API...');
+      const result = Drive.Comments.create(commentResource, docId);
+
+      console.log('Comment created successfully:', result.id);
+
+      return {
+        success: true,
+        message: 'Comment added successfully',
+        anchored: !!commentResource.anchor,
+        commentId: result.id
+      };
+
+    } catch (driveError) {
+      console.error('Drive API error:', driveError);
+
+      // If anchored comment failed, try without anchor
+      if (commentResource.anchor) {
+        try {
+          console.log('Retrying without anchor...');
+          const simpleComment = {
+            content: formattedComment
+          };
+
+          const result = Drive.Comments.create(simpleComment, docId);
+          console.log('Unanchored comment created successfully:', result.id);
+
+          return {
+            success: true,
+            message: 'Comment added successfully (unanchored)',
+            anchored: false,
+            commentId: result.id
+          };
+
+        } catch (simpleError) {
+          console.error('Simple comment also failed:', simpleError);
+          throw simpleError;
+        }
+      } else {
+        throw driveError;
+      }
+    }
+
+  } catch (error) {
+    console.error('Error creating comment:', error);
+
+    // Check if it's a specific error we can handle
+    if (error.message && error.message.includes('File not found')) {
+      return {
+        success: false,
+        error: 'Document access error. The add-on may need additional permissions to create comments.'
+      };
+    }
+
+    return {
+      success: false,
+      error: 'Failed to create comment: ' + error.toString()
+    };
+  }
+}
+
+/**
+ * Get selected text from the document
+ */
+function getSelectedText() {
+  try {
+    const doc = DocumentApp.getActiveDocument();
+    const selection = doc.getSelection();
+    
+    if (selection) {
+      const elements = selection.getSelectedElements();
+      let selectedText = '';
+      
+      for (let i = 0; i < elements.length; i++) {
+        const element = elements[i];
+        if (element.getElement().editAsText) {
+          const text = element.getElement().editAsText().getText();
+          if (element.isPartial()) {
+            selectedText += text.substring(
+              element.getStartOffset(),
+              element.getEndOffsetInclusive() + 1
+            );
+          } else {
+            selectedText += text;
+          }
+        }
+      }
+      
+      return {
+        success: true,
+        text: selectedText.trim(),
+        hasSelection: selectedText.trim().length > 0
+      };
+    }
+    
+    return {
+      success: true,
+      text: '',
+      hasSelection: false
+    };
+    
+  } catch (error) {
+    console.error('Error getting selected text:', error);
+    return {
+      success: false,
+      error: error.toString()
+    };
+  }
+}
+
+/**
+ * Include HTML files (for HtmlService)
+ */
+function include(filename) {
+  return HtmlService.createHtmlOutputFromFile(filename).getContent();
+}
+const API_BASE_URL = 'http://localhost:8000';
+const GOOGLE_CLIENT_ID = '134720547219-bqof9sbkq53kr3rsrhhl4ddnl2vdglg8.apps.googleusercontent.com';

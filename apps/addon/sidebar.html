@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GrantComply AI Assistant</title>
+  <style>
+    body {
+      font-family: 'Google Sans', Roboto, Arial, sans-serif;
+      margin: 0;
+      padding: 16px;
+      background-color: #f8f9fa;
+      color: #202124;
+      font-size: 14px;
+      line-height: 1.4;
+    }
+    
+    .header {
+      text-align: center;
+      margin-bottom: 20px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid #e8eaed;
+    }
+    
+    .header h1 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 500;
+      color: #1a73e8;
+    }
+    
+    .header p {
+      margin: 4px 0 0 0;
+      font-size: 12px;
+      color: #5f6368;
+    }
+    
+    .chat-container {
+      background: white;
+      border-radius: 8px;
+      border: 1px solid #e8eaed;
+      margin-bottom: 16px;
+    }
+    
+    .input-section {
+      padding: 16px;
+      border-bottom: 1px solid #e8eaed;
+    }
+    
+    .input-group {
+      margin-bottom: 12px;
+    }
+    
+    label {
+      display: block;
+      margin-bottom: 4px;
+      font-weight: 500;
+      color: #3c4043;
+      font-size: 13px;
+    }
+    
+    textarea, input[type="text"] {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid #dadce0;
+      border-radius: 4px;
+      font-size: 14px;
+      font-family: inherit;
+      resize: vertical;
+      box-sizing: border-box;
+    }
+    
+    textarea:focus, input[type="text"]:focus {
+      outline: none;
+      border-color: #1a73e8;
+      box-shadow: 0 0 0 1px #1a73e8;
+    }
+    
+    .button-group {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    
+    .btn {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 4px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+      flex: 1;
+    }
+    
+    .btn-primary {
+      background-color: #1a73e8;
+      color: white;
+    }
+    
+    .btn-primary:hover {
+      background-color: #1557b0;
+    }
+    
+    .btn-secondary {
+      background-color: #f8f9fa;
+      color: #3c4043;
+      border: 1px solid #dadce0;
+    }
+    
+    .btn-secondary:hover {
+      background-color: #f1f3f4;
+    }
+    
+    .btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    
+    .response-section {
+      padding: 16px;
+      min-height: 60px;
+    }
+    
+    .response-content {
+      background-color: #f8f9fa;
+      border-radius: 4px;
+      padding: 12px;
+      margin-bottom: 12px;
+      border-left: 3px solid #34a853;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    
+    .response-content.error {
+      border-left-color: #ea4335;
+      background-color: #fce8e6;
+      color: #d93025;
+    }
+    
+    .loading {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      color: #5f6368;
+    }
+    
+    .loading::after {
+      content: '';
+      width: 16px;
+      height: 16px;
+      margin-left: 8px;
+      border: 2px solid #e8eaed;
+      border-top: 2px solid #1a73e8;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    
+    .status-bar {
+      background-color: #e8f0fe;
+      padding: 8px 12px;
+      border-radius: 4px;
+      font-size: 12px;
+      color: #1a73e8;
+      margin-bottom: 16px;
+      text-align: center;
+    }
+    
+    .help-text {
+      font-size: 12px;
+      color: #5f6368;
+      margin-top: 8px;
+      line-height: 1.4;
+    }
+    
+    .selection-info {
+      background-color: #fff3cd;
+      border: 1px solid #ffeaa7;
+      border-radius: 4px;
+      padding: 8px;
+      margin-bottom: 12px;
+      font-size: 12px;
+      color: #856404;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>AI Assistant</h1>
+    <p>Ask questions and get AI-powered suggestions</p>
+  </div>
+  
+  <div id="statusBar" class="status-bar" style="display: none;">
+    Initializing...
+  </div>
+  
+  <div class="chat-container">
+    <div class="input-section">
+      <div id="selectionInfo" class="selection-info" style="display: none;">
+        <strong>Selected text:</strong> <span id="selectedText"></span>
+      </div>
+      
+      <div class="input-group">
+        <label for="questionInput">Your Question:</label>
+        <textarea 
+          id="questionInput" 
+          placeholder="Ask a question about your document, grant writing, or compliance..."
+          rows="3"
+        ></textarea>
+      </div>
+      
+      <div class="button-group">
+        <button id="askButton" class="btn btn-primary" onclick="askQuestion()">
+          Ask AI
+        </button>
+        <button id="clearButton" class="btn btn-secondary" onclick="clearResponse()">
+          Clear
+        </button>
+      </div>
+      
+      <div class="help-text">
+        💡 Tip: Select text in your document first to get more specific suggestions.
+      </div>
+    </div>
+    
+    <div class="response-section">
+      <div id="responseArea">
+        <div style="text-align: center; color: #5f6368; padding: 20px;">
+          Ask a question to get started!
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let currentSelection = '';
+    
+    // Initialize the sidebar
+    function initializeSidebar() {
+      updateSelectionInfo();
+      checkAuthStatus();
+    }
+    
+    // Check authentication status
+    function checkAuthStatus() {
+      google.script.run
+        .withSuccessHandler(handleAuthStatus)
+        .withFailureHandler(handleError)
+        .getUserAuthStatus();
+    }
+    
+    function handleAuthStatus(result) {
+      const statusBar = document.getElementById('statusBar');
+      if (result.success && result.authenticated) {
+        statusBar.textContent = `✓ Connected as ${result.email}`;
+        statusBar.style.display = 'block';
+        statusBar.style.backgroundColor = '#e8f5e8';
+        statusBar.style.color = '#137333';
+      } else if (result.success && !result.authenticated) {
+        statusBar.textContent = '⚠️ Not authenticated - Please sign up at GrantComply web app first';
+        statusBar.style.display = 'block';
+        statusBar.style.backgroundColor = '#fff3cd';
+        statusBar.style.color = '#856404';
+      } else {
+        statusBar.textContent = '❌ Authentication error - Check settings';
+        statusBar.style.display = 'block';
+        statusBar.style.backgroundColor = '#fce8e6';
+        statusBar.style.color = '#d93025';
+      }
+    }
+    
+    // Update selection info
+    function updateSelectionInfo() {
+      google.script.run
+        .withSuccessHandler(handleSelectionUpdate)
+        .withFailureHandler(handleError)
+        .getSelectedText();
+    }
+    
+    function handleSelectionUpdate(result) {
+      const selectionInfo = document.getElementById('selectionInfo');
+      const selectedTextSpan = document.getElementById('selectedText');
+      
+      if (result.success && result.hasSelection) {
+        currentSelection = result.text;
+        selectedTextSpan.textContent = result.text.substring(0, 100) + (result.text.length > 100 ? '...' : '');
+        selectionInfo.style.display = 'block';
+      } else {
+        currentSelection = '';
+        selectionInfo.style.display = 'none';
+      }
+    }
+    
+    // Ask AI question
+    function askQuestion() {
+      const questionInput = document.getElementById('questionInput');
+      const question = questionInput.value.trim();
+      
+      if (!question) {
+        alert('Please enter a question.');
+        return;
+      }
+      
+      // Show loading state
+      setLoading(true);
+      
+      // Call the AI API
+      google.script.run
+        .withSuccessHandler(handleAIResponse)
+        .withFailureHandler(handleError)
+        .askAI(question, currentSelection);
+    }
+    
+    function handleAIResponse(result) {
+      setLoading(false);
+
+      if (result.success) {
+        displayResponse(result.response, false);
+
+        // Automatically add as comment without asking
+        addAsComment(result.response);
+      } else {
+        displayResponse('Error: ' + result.error, true);
+      }
+    }
+    
+    function addAsComment(responseText) {
+      setLoading(true, 'Adding comment...');
+      
+      google.script.run
+        .withSuccessHandler(handleCommentResult)
+        .withFailureHandler(handleError)
+        .createComment(responseText, currentSelection);
+    }
+    
+    function handleCommentResult(result) {
+      setLoading(false);
+
+      if (result.success) {
+        // Just log success, no popup
+        console.log('Comment added successfully:', result.message);
+      } else {
+        // Show error in the response area instead of popup
+        displayResponse('Failed to add comment: ' + result.error, true);
+      }
+    }
+    
+    function displayResponse(text, isError = false) {
+      const responseArea = document.getElementById('responseArea');
+      const responseDiv = document.createElement('div');
+      responseDiv.className = 'response-content' + (isError ? ' error' : '');
+      responseDiv.textContent = text;
+      
+      responseArea.innerHTML = '';
+      responseArea.appendChild(responseDiv);
+    }
+    
+    function setLoading(loading, message = 'Processing...') {
+      const askButton = document.getElementById('askButton');
+      const responseArea = document.getElementById('responseArea');
+      
+      askButton.disabled = loading;
+      askButton.textContent = loading ? 'Processing...' : 'Ask AI';
+      
+      if (loading) {
+        responseArea.innerHTML = '<div class="loading">' + message + '</div>';
+      }
+    }
+    
+    function clearResponse() {
+      const responseArea = document.getElementById('responseArea');
+      const questionInput = document.getElementById('questionInput');
+      
+      responseArea.innerHTML = '<div style="text-align: center; color: #5f6368; padding: 20px;">Ask a question to get started!</div>';
+      questionInput.value = '';
+      questionInput.focus();
+    }
+    
+    function handleError(error) {
+      setLoading(false);
+      console.error('Error:', error);
+      displayResponse('An error occurred: ' + error.toString(), true);
+    }
+    
+    // Initialize when the page loads
+    document.addEventListener('DOMContentLoaded', initializeSidebar);
+    
+    // Refresh selection info when user clicks in the sidebar
+    document.addEventListener('click', function() {
+      setTimeout(updateSelectionInfo, 100);
+    });
+  </script>
+</body>
+</html>

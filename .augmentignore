@@ -1,0 +1,49 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+.next/
+dist/
+build/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Environment files
+.env
+
+# Logs
+*.log
+logs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+.dockerignore
+Dockerfile*
+
+# Temporary files
+tmp/
+temp/
+
+# Coverage
+coverage/
+.nyc_output/
+
+# Database
+*.db
+*.sqlite
+
+# Secrets
+secrets/
+*.pem
+*.key

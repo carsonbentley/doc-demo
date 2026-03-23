@@ -1,0 +1,37 @@
+# Railway ignore file for backend deployment
+
+# Development files
+.env
+.env.local
+.env.*.local
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Logs
+*.log
+logs/
+
+# Documentation
+README.md
+docs/
+
+# Other services (not needed for backend)
+../frontend/
+../../addon/
+../../docs/
+../../tools/

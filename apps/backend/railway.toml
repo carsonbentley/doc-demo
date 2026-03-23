@@ -1,0 +1,7 @@
+[deploy]
+startCommand = "poetry run uvicorn src.agent_api.main:app --host 0.0.0.0 --port $PORT"
+healthcheckPath = "/health"
+
+[variables]
+PORT = "8000"
+PYTHONPATH = "/app/src"

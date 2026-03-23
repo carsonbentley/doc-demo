@@ -1,0 +1,32 @@
+{
+  "name": "grantcomply-docs-addon",
+  "version": "1.0.0",
+  "description": "Google Docs add-on for GrantComply AI Assistant",
+  "main": "Code.gs",
+  "scripts": {
+    "setup": "./setup.sh",
+    "login": "clasp login",
+    "push": "clasp push",
+    "pull": "clasp pull",
+    "open": "clasp open",
+    "deploy": "clasp deploy",
+    "logs": "clasp logs",
+    "create": "clasp create --type standalone --title 'GrantComply AI Assistant'",
+    "watch": "clasp push --watch"
+  },
+  "keywords": [
+    "google-apps-script",
+    "google-docs",
+    "addon",
+    "ai",
+    "grant-writing"
+  ],
+  "author": "GrantComply Team",
+  "license": "MIT",
+  "devDependencies": {
+    "@google/clasp": "^2.4.2"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}
