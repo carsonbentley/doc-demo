@@ -49,11 +49,9 @@ export function AppNavigation({ user }: AppNavigationProps) {
           </div>
           
           <div className="flex items-center space-x-4">
-            <Link href="/app/profile">
-              <Button>
-                {teamName ? teamName : 'Create/Join Team'}
-              </Button>
-            </Link>
+            <Button variant="outline" disabled>
+              {teamName ? teamName : 'Team'}
+            </Button>
             <span className="text-sm text-gray-600">{user.email}</span>
             <SignOutButton />
           </div>

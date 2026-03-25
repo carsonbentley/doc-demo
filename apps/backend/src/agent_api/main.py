@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .routers import pdf, ai_chat, workbench
+from .routers import workbench
 
 
 # Configure structured logging
@@ -63,8 +63,6 @@ app.add_middleware(
 )
 
 # Include routers
-app.include_router(pdf.router, prefix="/v1/pdf", tags=["pdf"])
-app.include_router(ai_chat.router, prefix="/v1/ai", tags=["ai-chat"])
 app.include_router(workbench.router, prefix="/v1/workbench", tags=["workbench"])
 
 

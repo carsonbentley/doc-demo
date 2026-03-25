@@ -497,6 +497,12 @@ export type Database = {
           user_id: string
         }[]
       }
+      org_decline_invite: {
+        Args: {
+          p_invite_id: string
+        }
+        Returns: Json
+      }
       match_requirements_chunks: {
         Args: {
           match_count?: number
@@ -512,6 +518,36 @@ export type Database = {
           requirements_document_id: string
           similarity: number
         }[]
+      }
+      team_accept_invite: {
+        Args: {
+          p_invite_id: string
+        }
+        Returns: Json
+      }
+      team_create_no_password: {
+        Args: {
+          p_name: string
+        }
+        Returns: Json
+      }
+      team_invite: {
+        Args: {
+          p_email: string
+          p_team: string
+        }
+        Returns: Json
+      }
+      team_join: {
+        Args: {
+          p_password: string
+          p_username: string
+        }
+        Returns: Json
+      }
+      team_leave: {
+        Args: never
+        Returns: Json
       }
     }
     Enums: {
