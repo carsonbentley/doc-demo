@@ -15,6 +15,7 @@ type Organization = {
   id: string;
   name: string;
   description: string | null;
+  user_id: string;
 };
 
 type WorkSectionLink = {
@@ -22,6 +23,7 @@ type WorkSectionLink = {
   chunk_text: string;
   chunk_index: number;
   requirements_document_id: string;
+  metadata?: { section_title?: string };
   similarity: number;
 };
 
@@ -31,7 +33,8 @@ type LinkedSection = {
   links: WorkSectionLink[];
 };
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_AGENT_API_URL || 'http://localhost:8002';
+const API_BASE_URL =
+  (process.env.NEXT_PUBLIC_AGENT_API_URL?.trim() || 'http://127.0.0.1:8002').replace(/\/$/, '');
 
 export default function OrganizationWorkbenchPage() {
   const params = useParams();
@@ -60,16 +63,27 @@ export default function OrganizationWorkbenchPage() {
         const { data: authData } = await supabase.auth.getUser();
         setUserId(authData.user?.id ?? null);
 
+        if (!authData.user?.id) {
+          throw new Error('You must be logged in to access this page.');
+        }
+
         const { data, error: orgError } = await supabase
           .from('organizations')
-          .select('id, name, description')
+          .select('id, name, description, user_id')
           .eq('id', organizationId)
           .single();
         if (orgError) throw orgError;
-        setOrganization(data as Organization);
+        const org = data as Organization;
+        setOrganization(org);
       } catch (e) {
-        console.error(e);
-        setError('Failed to load organization.');
+        const errorMessage =
+          e instanceof Error
+            ? e.message
+            : typeof e === 'object'
+              ? JSON.stringify(e)
+              : 'Failed to load organization.';
+        console.error('Organization load failed:', e);
+        setError(errorMessage);
       } finally {
         setLoading(false);
       }
@@ -77,29 +91,41 @@ export default function OrganizationWorkbenchPage() {
     if (organizationId) void load();
   }, [organizationId, supabase]);
 
-  const ingestRequirements = async () => {
+  const ingestRequirements = async (): Promise<string> => {
     if (!userId) throw new Error('You must be signed in.');
     if (!requirementsText.trim()) throw new Error('Requirements text is empty.');
 
-    const response = await fetch(`${API_BASE_URL}/v1/workbench/requirements/ingest`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        organization_id: organizationId,
-        uploaded_by: userId,
-        title: requirementsTitle,
-        raw_text: requirementsText,
-        source_type: 'text',
-      }),
-    });
+    let response: Response;
+    try {
+      response = await fetch(`${API_BASE_URL}/v1/workbench/requirements/ingest`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          organization_id: organizationId,
+          uploaded_by: userId,
+          title: requirementsTitle,
+          raw_text: requirementsText,
+          source_type: 'text',
+        }),
+      });
+    } catch {
+      throw new Error(
+        `Failed to reach backend at ${API_BASE_URL}. Ensure backend is running and NEXT_PUBLIC_AGENT_API_URL is correct.`
+      );
+    }
     if (!response.ok) {
-      throw new Error(`Failed to ingest requirements (${response.status})`);
+      const payload = await response.json().catch(() => null);
+      const detail = payload && typeof payload === 'object' && 'detail' in payload
+        ? String((payload as { detail?: unknown }).detail)
+        : null;
+      throw new Error(detail || `Failed to ingest requirements (${response.status})`);
     }
     const payload = await response.json();
     setRequirementsDocId(payload.requirements_document_id);
+    return payload.requirements_document_id as string;
   };
 
-  const ingestWorkDocument = async () => {
+  const ingestWorkDocument = async (): Promise<string> => {
     if (!userId) throw new Error('You must be signed in.');
     if (!workText.trim()) throw new Error('SOW/template text is empty.');
 
@@ -118,16 +144,21 @@ export default function OrganizationWorkbenchPage() {
     }
     const payload = await response.json();
     setWorkDocumentId(payload.work_document_id);
+    return payload.work_document_id as string;
   };
 
-  const linkSections = async () => {
-    if (!workDocumentId) throw new Error('Ingest the SOW/template first.');
+  const linkSections = async (workDocIdParam?: string, requirementsDocIdParam?: string) => {
+    const activeWorkDocumentId = workDocIdParam ?? workDocumentId;
+    const activeRequirementsDocId = requirementsDocIdParam ?? requirementsDocId;
+    if (!activeWorkDocumentId) throw new Error('Ingest the SOW/template first.');
+    if (!activeRequirementsDocId) throw new Error('Ingest the requirements document first.');
     const response = await fetch(`${API_BASE_URL}/v1/workbench/work/link`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         organization_id: organizationId,
-        work_document_id: workDocumentId,
+        work_document_id: activeWorkDocumentId,
+        requirements_document_id: activeRequirementsDocId,
         max_links_per_section: 5,
         min_similarity: 0.6,
       }),
@@ -143,9 +174,9 @@ export default function OrganizationWorkbenchPage() {
     setSubmitting(true);
     setError(null);
     try {
-      await ingestRequirements();
-      await ingestWorkDocument();
-      await linkSections();
+      const newRequirementsDocId = await ingestRequirements();
+      const newWorkDocumentId = await ingestWorkDocument();
+      await linkSections(newWorkDocumentId, newRequirementsDocId);
     } catch (e) {
       console.error(e);
       setError(e instanceof Error ? e.message : 'Failed to run demo flow.');
@@ -263,6 +294,9 @@ export default function OrganizationWorkbenchPage() {
                       <div className="mb-1 flex items-center gap-2">
                         <LinkIcon className="h-3 w-3" />
                         <span>Similarity: {(link.similarity * 100).toFixed(1)}%</span>
+                        {link.metadata?.section_title && (
+                          <span className="text-gray-500">Source: {link.metadata.section_title}</span>
+                        )}
                       </div>
                       <p>{link.chunk_text}</p>
                     </div>

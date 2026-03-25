@@ -20,12 +20,10 @@ export default function ProtectedLayout({
   useEffect(() => {
     const getUser = async () => {
       const { data: { user } } = await supabase.auth.getUser();
-      
       if (!user) {
         router.push('/login');
         return;
       }
-      
       setUser(user);
       setLoading(false);
     };
@@ -55,7 +53,7 @@ export default function ProtectedLayout({
   }
 
   if (!user) {
-    return null; // Will redirect to login
+    return null;
   }
 
   return (

@@ -4,93 +4,644 @@ export type Json =
   | boolean
   | null
   | { [key: string]: Json | undefined }
-  | Json[];
+  | Json[]
 
 export type Database = {
+  // Allows to automatically instantiate createClient with right options
+  // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
+  __InternalSupabase: {
+    PostgrestVersion: "14.4"
+  }
   public: {
     Tables: {
-      teams: {
-        Row: { id: string; name: string; owner_id: string; username: string | null; created_at: string; updated_at: string };
-        Insert: { id?: string; name: string; owner_id: string; username?: string | null; created_at?: string; updated_at?: string };
-        Update: { id?: string; name?: string; owner_id?: string; username?: string | null; created_at?: string; updated_at?: string };
-        Relationships: [];
-      };
-      users: {
-        Row: { id: string; email: string; team_id: string | null; role: string; created_at: string; updated_at: string };
-        Insert: { id: string; email: string; team_id?: string | null; role?: string; created_at?: string; updated_at?: string };
-        Update: { id?: string; email?: string; team_id?: string | null; role?: string; created_at?: string; updated_at?: string };
-        Relationships: [];
-      };
-      organizations: {
-        Row: { id: string; team_id: string; user_id: string; name: string; description: string | null; status: string; due_date: string | null; created_at: string; updated_at: string };
-        Insert: { id?: string; team_id: string; user_id: string; name: string; description?: string | null; status?: string; due_date?: string | null; created_at?: string; updated_at?: string };
-        Update: { id?: string; team_id?: string; user_id?: string; name?: string; description?: string | null; status?: string; due_date?: string | null; created_at?: string; updated_at?: string };
-        Relationships: [];
-      };
-      projects: {
-        Row: { id: string; organization_id: string; user_id: string; name: string; description: string | null; created_at: string; updated_at: string };
-        Insert: { id?: string; organization_id: string; user_id: string; name: string; description?: string | null; created_at?: string; updated_at?: string };
-        Update: { id?: string; organization_id?: string; user_id?: string; name?: string; description?: string | null; created_at?: string; updated_at?: string };
-        Relationships: [];
-      };
-      team_invitations: {
-        Row: { id: string; team_id: string; email: string; status: string; created_at: string };
-        Insert: { id?: string; team_id: string; email: string; status?: string; created_at?: string };
-        Update: { id?: string; team_id?: string; email?: string; status?: string; created_at?: string };
-        Relationships: [];
-      };
       email_waitlist: {
-        Row: { id: string; email: string; source: string | null; metadata: Json | null; created_at: string };
-        Insert: { id?: string; email: string; source?: string | null; metadata?: Json | null; created_at?: string };
-        Update: { id?: string; email?: string; source?: string | null; metadata?: Json | null; created_at?: string };
-        Relationships: [];
-      };
-      requirements_documents: {
-        Row: { id: string; organization_id: string; uploaded_by: string; title: string; source_type: string; source_name: string | null; raw_text: string; metadata: Json; created_at: string; updated_at: string };
-        Insert: { id?: string; organization_id: string; uploaded_by: string; title: string; source_type?: string; source_name?: string | null; raw_text: string; metadata?: Json; created_at?: string; updated_at?: string };
-        Update: { id?: string; organization_id?: string; uploaded_by?: string; title?: string; source_type?: string; source_name?: string | null; raw_text?: string; metadata?: Json; created_at?: string; updated_at?: string };
-        Relationships: [];
-      };
+        Row: {
+          created_at: string
+          email: string
+          id: string
+          metadata: Json | null
+          source: string | null
+        }
+        Insert: {
+          created_at?: string
+          email: string
+          id?: string
+          metadata?: Json | null
+          source?: string | null
+        }
+        Update: {
+          created_at?: string
+          email?: string
+          id?: string
+          metadata?: Json | null
+          source?: string | null
+        }
+        Relationships: []
+      }
+      organizations: {
+        Row: {
+          created_at: string
+          description: string | null
+          due_date: string | null
+          id: string
+          name: string
+          status: string
+          team_id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          description?: string | null
+          due_date?: string | null
+          id?: string
+          name: string
+          status?: string
+          team_id: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          description?: string | null
+          due_date?: string | null
+          id?: string
+          name?: string
+          status?: string
+          team_id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "organizations_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "organizations_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      projects: {
+        Row: {
+          created_at: string
+          description: string | null
+          id: string
+          name: string
+          organization_id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          description?: string | null
+          id?: string
+          name: string
+          organization_id: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          description?: string | null
+          id?: string
+          name?: string
+          organization_id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "projects_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "projects_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       requirements_chunks: {
-        Row: { id: string; organization_id: string; requirements_document_id: string; chunk_index: number; chunk_text: string; embedding: string | null; metadata: Json; created_at: string; updated_at: string };
-        Insert: { id?: string; organization_id: string; requirements_document_id: string; chunk_index: number; chunk_text: string; embedding?: string | null; metadata?: Json; created_at?: string; updated_at?: string };
-        Update: { id?: string; organization_id?: string; requirements_document_id?: string; chunk_index?: number; chunk_text?: string; embedding?: string | null; metadata?: Json; created_at?: string; updated_at?: string };
-        Relationships: [];
-      };
-      work_documents: {
-        Row: { id: string; organization_id: string; uploaded_by: string; title: string; raw_text: string; metadata: Json; created_at: string; updated_at: string };
-        Insert: { id?: string; organization_id: string; uploaded_by: string; title: string; raw_text: string; metadata?: Json; created_at?: string; updated_at?: string };
-        Update: { id?: string; organization_id?: string; uploaded_by?: string; title?: string; raw_text?: string; metadata?: Json; created_at?: string; updated_at?: string };
-        Relationships: [];
-      };
-      work_sections: {
-        Row: { id: string; organization_id: string; work_document_id: string; section_key: string; section_title: string; content: string; section_order: number; created_at: string; updated_at: string };
-        Insert: { id?: string; organization_id: string; work_document_id: string; section_key: string; section_title: string; content: string; section_order?: number; created_at?: string; updated_at?: string };
-        Update: { id?: string; organization_id?: string; work_document_id?: string; section_key?: string; section_title?: string; content?: string; section_order?: number; created_at?: string; updated_at?: string };
-        Relationships: [];
-      };
+        Row: {
+          chunk_index: number
+          chunk_text: string
+          created_at: string
+          embedding: string | null
+          id: string
+          metadata: Json
+          organization_id: string
+          requirements_document_id: string
+          updated_at: string
+        }
+        Insert: {
+          chunk_index: number
+          chunk_text: string
+          created_at?: string
+          embedding?: string | null
+          id?: string
+          metadata?: Json
+          organization_id: string
+          requirements_document_id: string
+          updated_at?: string
+        }
+        Update: {
+          chunk_index?: number
+          chunk_text?: string
+          created_at?: string
+          embedding?: string | null
+          id?: string
+          metadata?: Json
+          organization_id?: string
+          requirements_document_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "requirements_chunks_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "requirements_chunks_requirements_document_id_fkey"
+            columns: ["requirements_document_id"]
+            isOneToOne: false
+            referencedRelation: "requirements_documents"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      requirements_documents: {
+        Row: {
+          created_at: string
+          id: string
+          metadata: Json
+          organization_id: string
+          raw_text: string
+          source_name: string | null
+          source_type: string
+          title: string
+          updated_at: string
+          uploaded_by: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          metadata?: Json
+          organization_id: string
+          raw_text: string
+          source_name?: string | null
+          source_type?: string
+          title: string
+          updated_at?: string
+          uploaded_by: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          metadata?: Json
+          organization_id?: string
+          raw_text?: string
+          source_name?: string | null
+          source_type?: string
+          title?: string
+          updated_at?: string
+          uploaded_by?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "requirements_documents_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "requirements_documents_uploaded_by_fkey"
+            columns: ["uploaded_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       section_requirement_links: {
-        Row: { id: string; organization_id: string; work_section_id: string; requirements_chunk_id: string; similarity: number; rationale: string | null; created_at: string };
-        Insert: { id?: string; organization_id: string; work_section_id: string; requirements_chunk_id: string; similarity: number; rationale?: string | null; created_at?: string };
-        Update: { id?: string; organization_id?: string; work_section_id?: string; requirements_chunk_id?: string; similarity?: number; rationale?: string | null; created_at?: string };
-        Relationships: [];
-      };
-    };
-    Views: { [_ in never]: never };
+        Row: {
+          created_at: string
+          id: string
+          organization_id: string
+          rationale: string | null
+          requirements_chunk_id: string
+          similarity: number
+          work_section_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          organization_id: string
+          rationale?: string | null
+          requirements_chunk_id: string
+          similarity: number
+          work_section_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          organization_id?: string
+          rationale?: string | null
+          requirements_chunk_id?: string
+          similarity?: number
+          work_section_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "section_requirement_links_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "section_requirement_links_requirements_chunk_id_fkey"
+            columns: ["requirements_chunk_id"]
+            isOneToOne: false
+            referencedRelation: "requirements_chunks"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "section_requirement_links_work_section_id_fkey"
+            columns: ["work_section_id"]
+            isOneToOne: false
+            referencedRelation: "work_sections"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      team_invitations: {
+        Row: {
+          created_at: string
+          email: string
+          id: string
+          status: string
+          team_id: string
+        }
+        Insert: {
+          created_at?: string
+          email: string
+          id?: string
+          status?: string
+          team_id: string
+        }
+        Update: {
+          created_at?: string
+          email?: string
+          id?: string
+          status?: string
+          team_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "team_invitations_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      teams: {
+        Row: {
+          created_at: string
+          id: string
+          name: string
+          owner_id: string
+          updated_at: string
+          username: string | null
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          name: string
+          owner_id: string
+          updated_at?: string
+          username?: string | null
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          name?: string
+          owner_id?: string
+          updated_at?: string
+          username?: string | null
+        }
+        Relationships: []
+      }
+      users: {
+        Row: {
+          created_at: string
+          email: string
+          id: string
+          role: string
+          team_id: string | null
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          email: string
+          id: string
+          role?: string
+          team_id?: string | null
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          email?: string
+          id?: string
+          role?: string
+          team_id?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "users_team_id_fkey"
+            columns: ["team_id"]
+            isOneToOne: false
+            referencedRelation: "teams"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      work_documents: {
+        Row: {
+          created_at: string
+          id: string
+          metadata: Json
+          organization_id: string
+          raw_text: string
+          title: string
+          updated_at: string
+          uploaded_by: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          metadata?: Json
+          organization_id: string
+          raw_text: string
+          title: string
+          updated_at?: string
+          uploaded_by: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          metadata?: Json
+          organization_id?: string
+          raw_text?: string
+          title?: string
+          updated_at?: string
+          uploaded_by?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "work_documents_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "work_documents_uploaded_by_fkey"
+            columns: ["uploaded_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      work_sections: {
+        Row: {
+          content: string
+          created_at: string
+          id: string
+          organization_id: string
+          section_key: string
+          section_order: number
+          section_title: string
+          updated_at: string
+          work_document_id: string
+        }
+        Insert: {
+          content: string
+          created_at?: string
+          id?: string
+          organization_id: string
+          section_key: string
+          section_order?: number
+          section_title: string
+          updated_at?: string
+          work_document_id: string
+        }
+        Update: {
+          content?: string
+          created_at?: string
+          id?: string
+          organization_id?: string
+          section_key?: string
+          section_order?: number
+          section_title?: string
+          updated_at?: string
+          work_document_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "work_sections_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "work_sections_work_document_id_fkey"
+            columns: ["work_document_id"]
+            isOneToOne: false
+            referencedRelation: "work_documents"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+    }
+    Views: {
+      [_ in never]: never
+    }
     Functions: {
-      get_team_members: { Args: Record<string, never>; Returns: { user_id: string; email: string; role: string }[] };
+      get_team_members: {
+        Args: never
+        Returns: {
+          email: string
+          role: string
+          user_id: string
+        }[]
+      }
       match_requirements_chunks: {
-        Args: { query_embedding: string; query_organization_id: string; min_similarity?: number; match_count?: number };
-        Returns: { id: string; requirements_document_id: string; chunk_index: number; chunk_text: string; metadata: Json; similarity: number }[];
-      };
-      team_create_no_password: { Args: { p_name: string }; Returns: Json };
-      team_accept_invite: { Args: { p_invite_id: string }; Returns: Json };
-      org_decline_invite: { Args: { p_invite_id: string }; Returns: Json };
-      team_invite: { Args: { p_team: string; p_email: string }; Returns: Json };
-      team_join: { Args: { p_username: string; p_password: string }; Returns: Json };
-      team_leave: { Args: Record<string, never>; Returns: Json };
-    };
-    Enums: { [_ in never]: never };
-    CompositeTypes: { [_ in never]: never };
-  };
-};
+        Args: {
+          match_count?: number
+          min_similarity?: number
+          query_embedding: string
+          query_organization_id: string
+        }
+        Returns: {
+          chunk_index: number
+          chunk_text: string
+          id: string
+          metadata: Json
+          requirements_document_id: string
+          similarity: number
+        }[]
+      }
+    }
+    Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
+      [_ in never]: never
+    }
+  }
+}
+
+type DatabaseWithoutInternals = Omit<Database, "__InternalSupabase">
+
+type DefaultSchema = DatabaseWithoutInternals[Extract<keyof Database, "public">]
+
+export type Tables<
+  DefaultSchemaTableNameOrOptions extends
+    | keyof (DefaultSchema["Tables"] & DefaultSchema["Views"])
+    | { schema: keyof DatabaseWithoutInternals },
+  TableName extends DefaultSchemaTableNameOrOptions extends {
+    schema: keyof DatabaseWithoutInternals
+  }
+    ? keyof (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
+        DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])
+    : never = never,
+> = DefaultSchemaTableNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals
+}
+  ? (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
+      DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])[TableName] extends {
+      Row: infer R
+    }
+    ? R
+    : never
+  : DefaultSchemaTableNameOrOptions extends keyof (DefaultSchema["Tables"] &
+        DefaultSchema["Views"])
+    ? (DefaultSchema["Tables"] &
+        DefaultSchema["Views"])[DefaultSchemaTableNameOrOptions] extends {
+        Row: infer R
+      }
+      ? R
+      : never
+    : never
+
+export type TablesInsert<
+  DefaultSchemaTableNameOrOptions extends
+    | keyof DefaultSchema["Tables"]
+    | { schema: keyof DatabaseWithoutInternals },
+  TableName extends DefaultSchemaTableNameOrOptions extends {
+    schema: keyof DatabaseWithoutInternals
+  }
+    ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
+    : never = never,
+> = DefaultSchemaTableNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals
+}
+  ? DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"][TableName] extends {
+      Insert: infer I
+    }
+    ? I
+    : never
+  : DefaultSchemaTableNameOrOptions extends keyof DefaultSchema["Tables"]
+    ? DefaultSchema["Tables"][DefaultSchemaTableNameOrOptions] extends {
+        Insert: infer I
+      }
+      ? I
+      : never
+    : never
+
+export type TablesUpdate<
+  DefaultSchemaTableNameOrOptions extends
+    | keyof DefaultSchema["Tables"]
+    | { schema: keyof DatabaseWithoutInternals },
+  TableName extends DefaultSchemaTableNameOrOptions extends {
+    schema: keyof DatabaseWithoutInternals
+  }
+    ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
+    : never = never,
+> = DefaultSchemaTableNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals
+}
+  ? DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"][TableName] extends {
+      Update: infer U
+    }
+    ? U
+    : never
+  : DefaultSchemaTableNameOrOptions extends keyof DefaultSchema["Tables"]
+    ? DefaultSchema["Tables"][DefaultSchemaTableNameOrOptions] extends {
+        Update: infer U
+      }
+      ? U
+      : never
+    : never
+
+export type Enums<
+  DefaultSchemaEnumNameOrOptions extends
+    | keyof DefaultSchema["Enums"]
+    | { schema: keyof DatabaseWithoutInternals },
+  EnumName extends DefaultSchemaEnumNameOrOptions extends {
+    schema: keyof DatabaseWithoutInternals
+  }
+    ? keyof DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"]
+    : never = never,
+> = DefaultSchemaEnumNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals
+}
+  ? DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"][EnumName]
+  : DefaultSchemaEnumNameOrOptions extends keyof DefaultSchema["Enums"]
+    ? DefaultSchema["Enums"][DefaultSchemaEnumNameOrOptions]
+    : never
+
+export type CompositeTypes<
+  PublicCompositeTypeNameOrOptions extends
+    | keyof DefaultSchema["CompositeTypes"]
+    | { schema: keyof DatabaseWithoutInternals },
+  CompositeTypeName extends PublicCompositeTypeNameOrOptions extends {
+    schema: keyof DatabaseWithoutInternals
+  }
+    ? keyof DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"]
+    : never = never,
+> = PublicCompositeTypeNameOrOptions extends {
+  schema: keyof DatabaseWithoutInternals
+}
+  ? DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"][CompositeTypeName]
+  : PublicCompositeTypeNameOrOptions extends keyof DefaultSchema["CompositeTypes"]
+    ? DefaultSchema["CompositeTypes"][PublicCompositeTypeNameOrOptions]
+    : never
+
+export const Constants = {
+  public: {
+    Enums: {},
+  },
+} as const
