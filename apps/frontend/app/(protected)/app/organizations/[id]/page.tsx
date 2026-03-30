@@ -33,6 +33,8 @@ type LinkedSection = {
   links: WorkSectionLink[];
 };
 
+type InputMode = 'text' | 'pdf';
+
 const API_BASE_URL =
   (process.env.NEXT_PUBLIC_AGENT_API_URL?.trim() || 'http://127.0.0.1:8002').replace(/\/$/, '');
 
@@ -53,8 +55,12 @@ export default function OrganizationWorkbenchPage() {
 
   const [requirementsTitle, setRequirementsTitle] = useState('DO-160 Requirements');
   const [requirementsText, setRequirementsText] = useState('');
+  const [requirementsInputMode, setRequirementsInputMode] = useState<InputMode>('text');
+  const [requirementsPdfFile, setRequirementsPdfFile] = useState<File | null>(null);
   const [workTitle, setWorkTitle] = useState('SOW Draft');
   const [workText, setWorkText] = useState('');
+  const [workInputMode, setWorkInputMode] = useState<InputMode>('text');
+  const [workPdfFile, setWorkPdfFile] = useState<File | null>(null);
 
   useEffect(() => {
     const load = async () => {
@@ -93,21 +99,42 @@ export default function OrganizationWorkbenchPage() {
 
   const ingestRequirements = async (): Promise<string> => {
     if (!userId) throw new Error('You must be signed in.');
-    if (!requirementsText.trim()) throw new Error('Requirements text is empty.');
+
+    if (requirementsInputMode === 'text' && !requirementsText.trim()) {
+      throw new Error('Requirements text is empty.');
+    }
+    if (requirementsInputMode === 'pdf' && !requirementsPdfFile) {
+      throw new Error('Please upload a requirements PDF.');
+    }
 
     let response: Response;
     try {
-      response = await fetch(`${API_BASE_URL}/v1/workbench/requirements/ingest`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          organization_id: organizationId,
-          uploaded_by: userId,
-          title: requirementsTitle,
-          raw_text: requirementsText,
-          source_type: 'text',
-        }),
-      });
+      if (requirementsInputMode === 'pdf') {
+        const formData = new FormData();
+        formData.append('organization_id', organizationId);
+        formData.append('uploaded_by', userId);
+        formData.append('title', requirementsTitle);
+        if (requirementsPdfFile) {
+          formData.append('file', requirementsPdfFile);
+          formData.append('source_name', requirementsPdfFile.name);
+        }
+        response = await fetch(`${API_BASE_URL}/v1/workbench/requirements/ingest-pdf`, {
+          method: 'POST',
+          body: formData,
+        });
+      } else {
+        response = await fetch(`${API_BASE_URL}/v1/workbench/requirements/ingest`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            organization_id: organizationId,
+            uploaded_by: userId,
+            title: requirementsTitle,
+            raw_text: requirementsText,
+            source_type: 'text',
+          }),
+        });
+      }
     } catch {
       throw new Error(
         `Failed to reach backend at ${API_BASE_URL}. Ensure backend is running and NEXT_PUBLIC_AGENT_API_URL is correct.`
@@ -127,20 +154,40 @@ export default function OrganizationWorkbenchPage() {
 
   const ingestWorkDocument = async (): Promise<string> => {
     if (!userId) throw new Error('You must be signed in.');
-    if (!workText.trim()) throw new Error('SOW/template text is empty.');
+    if (workInputMode === 'text' && !workText.trim()) throw new Error('SOW/template text is empty.');
+    if (workInputMode === 'pdf' && !workPdfFile) throw new Error('Please upload a SOW/template PDF.');
 
-    const response = await fetch(`${API_BASE_URL}/v1/workbench/work/ingest`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        organization_id: organizationId,
-        uploaded_by: userId,
-        title: workTitle,
-        raw_text: workText,
-      }),
-    });
+    let response: Response;
+    if (workInputMode === 'pdf') {
+      const formData = new FormData();
+      formData.append('organization_id', organizationId);
+      formData.append('uploaded_by', userId);
+      formData.append('title', workTitle);
+      if (workPdfFile) {
+        formData.append('file', workPdfFile);
+      }
+      response = await fetch(`${API_BASE_URL}/v1/workbench/work/ingest-pdf`, {
+        method: 'POST',
+        body: formData,
+      });
+    } else {
+      response = await fetch(`${API_BASE_URL}/v1/workbench/work/ingest`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          organization_id: organizationId,
+          uploaded_by: userId,
+          title: workTitle,
+          raw_text: workText,
+        }),
+      });
+    }
     if (!response.ok) {
-      throw new Error(`Failed to ingest work document (${response.status})`);
+      const payload = await response.json().catch(() => null);
+      const detail = payload && typeof payload === 'object' && 'detail' in payload
+        ? String((payload as { detail?: unknown }).detail)
+        : null;
+      throw new Error(detail || `Failed to ingest work document (${response.status})`);
     }
     const payload = await response.json();
     setWorkDocumentId(payload.work_document_id);
@@ -227,6 +274,22 @@ export default function OrganizationWorkbenchPage() {
             <CardTitle>1) Requirements Upload</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant={requirementsInputMode === 'text' ? 'default' : 'outline'}
+                onClick={() => setRequirementsInputMode('text')}
+              >
+                Text
+              </Button>
+              <Button
+                type="button"
+                variant={requirementsInputMode === 'pdf' ? 'default' : 'outline'}
+                onClick={() => setRequirementsInputMode('pdf')}
+              >
+                PDF
+              </Button>
+            </div>
             <div className="space-y-1">
               <Label htmlFor="requirementsTitle">Document Title</Label>
               <Input
@@ -235,16 +298,28 @@ export default function OrganizationWorkbenchPage() {
                 onChange={(e) => setRequirementsTitle(e.target.value)}
               />
             </div>
-            <div className="space-y-1">
-              <Label htmlFor="requirementsText">Requirements Text</Label>
-              <Textarea
-                id="requirementsText"
-                rows={14}
-                value={requirementsText}
-                onChange={(e) => setRequirementsText(e.target.value)}
-                placeholder="Paste requirements corpus content here..."
-              />
-            </div>
+            {requirementsInputMode === 'text' ? (
+              <div className="space-y-1">
+                <Label htmlFor="requirementsText">Requirements Text</Label>
+                <Textarea
+                  id="requirementsText"
+                  rows={14}
+                  value={requirementsText}
+                  onChange={(e) => setRequirementsText(e.target.value)}
+                  placeholder="Paste requirements corpus content here..."
+                />
+              </div>
+            ) : (
+              <div className="space-y-1">
+                <Label htmlFor="requirementsPdf">Requirements PDF</Label>
+                <Input
+                  id="requirementsPdf"
+                  type="file"
+                  accept="application/pdf"
+                  onChange={(e) => setRequirementsPdfFile(e.target.files?.[0] ?? null)}
+                />
+              </div>
+            )}
             {requirementsDocId && (
               <p className="text-xs text-green-700">Requirements ingested: {requirementsDocId}</p>
             )}
@@ -256,20 +331,48 @@ export default function OrganizationWorkbenchPage() {
             <CardTitle>2) SOW / Template Editor</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant={workInputMode === 'text' ? 'default' : 'outline'}
+                onClick={() => setWorkInputMode('text')}
+              >
+                Text
+              </Button>
+              <Button
+                type="button"
+                variant={workInputMode === 'pdf' ? 'default' : 'outline'}
+                onClick={() => setWorkInputMode('pdf')}
+              >
+                PDF
+              </Button>
+            </div>
             <div className="space-y-1">
               <Label htmlFor="workTitle">Work Document Title</Label>
               <Input id="workTitle" value={workTitle} onChange={(e) => setWorkTitle(e.target.value)} />
             </div>
-            <div className="space-y-1">
-              <Label htmlFor="workText">SOW / Template Text</Label>
-              <Textarea
-                id="workText"
-                rows={14}
-                value={workText}
-                onChange={(e) => setWorkText(e.target.value)}
-                placeholder="Paste your draft SOW/template here..."
-              />
-            </div>
+            {workInputMode === 'text' ? (
+              <div className="space-y-1">
+                <Label htmlFor="workText">SOW / Template Text</Label>
+                <Textarea
+                  id="workText"
+                  rows={14}
+                  value={workText}
+                  onChange={(e) => setWorkText(e.target.value)}
+                  placeholder="Paste your draft SOW/template here..."
+                />
+              </div>
+            ) : (
+              <div className="space-y-1">
+                <Label htmlFor="workPdf">SOW / Template PDF</Label>
+                <Input
+                  id="workPdf"
+                  type="file"
+                  accept="application/pdf"
+                  onChange={(e) => setWorkPdfFile(e.target.files?.[0] ?? null)}
+                />
+              </div>
+            )}
             {workDocumentId && <p className="text-xs text-green-700">Work doc ingested: {workDocumentId}</p>}
           </CardContent>
         </Card>

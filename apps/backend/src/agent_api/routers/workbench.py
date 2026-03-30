@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import math
 import re
 from typing import Any, Dict, List, Set
 
-from fastapi import APIRouter, Depends, HTTPException
+import fitz  # PyMuPDF
+import numpy as np
+import cv2
+import pytesseract
+from PIL import Image
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from openai import OpenAI
 from pydantic import BaseModel, Field
 
@@ -19,6 +25,8 @@ router = APIRouter()
 EMBEDDING_DIMENSION = 1536
 CHUNK_SIZE = 900
 CHUNK_OVERLAP = 120
+PDF_TEXT_THRESHOLD = 80
+OCR_CONFIG = "--oem 3 --psm 6"
 
 
 class IngestRequirementsRequest(BaseModel):
@@ -33,6 +41,9 @@ class IngestRequirementsRequest(BaseModel):
 class IngestRequirementsResponse(BaseModel):
     requirements_document_id: str
     chunk_count: int
+    page_count: int | None = None
+    ocr_pages: int | None = None
+    extraction_warnings: List[str] = []
 
 
 class IngestWorkDocumentRequest(BaseModel):
@@ -53,6 +64,9 @@ class WorkSectionModel(BaseModel):
 class IngestWorkDocumentResponse(BaseModel):
     work_document_id: str
     sections: List[WorkSectionModel]
+    page_count: int | None = None
+    ocr_pages: int | None = None
+    extraction_warnings: List[str] = []
 
 
 class LinkRequirementsRequest(BaseModel):
@@ -75,6 +89,158 @@ class LinkRequirementsResponse(BaseModel):
 
 def _normalize_whitespace(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _line_looks_like_table_row(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if "|" in stripped or "\t" in stripped:
+        return True
+    if re.search(r"\S+\s{2,}\S+", stripped):
+        token_count = len(re.findall(r"\S+", stripped))
+        return token_count >= 3
+    return False
+
+
+def _format_table_and_text_blocks(page_text: str, page_number: int) -> str:
+    lines = [line.rstrip() for line in page_text.splitlines()]
+    if not lines:
+        return ""
+
+    blocks: List[str] = []
+    table_lines: List[str] = []
+    text_lines: List[str] = []
+
+    def flush_text() -> None:
+        nonlocal text_lines
+        joined = "\n".join([line for line in text_lines if line.strip()]).strip()
+        if joined:
+            blocks.append(joined)
+        text_lines = []
+
+    def flush_table() -> None:
+        nonlocal table_lines
+        joined = "\n".join([line for line in table_lines if line.strip()]).strip()
+        if joined:
+            blocks.append(f"[TABLE: page {page_number}]\n{joined}")
+        table_lines = []
+
+    for line in lines:
+        if _line_looks_like_table_row(line):
+            flush_text()
+            table_lines.append(line)
+        else:
+            flush_table()
+            text_lines.append(line)
+
+    flush_text()
+    flush_table()
+    return "\n\n".join(blocks).strip()
+
+
+def _page_figure_placeholder(page: fitz.Page, fallback_text: str, page_number: int) -> str | None:
+    caption_match = re.search(r"(figure|fig\.|chart|graph)[^\n]{0,100}", fallback_text, re.IGNORECASE)
+    if caption_match:
+        return f"[FIGURE: page {page_number}] {caption_match.group(0).strip()}"
+
+    has_images = len(page.get_images(full=True)) > 0
+    has_drawings = len(page.get_drawings()) >= 3
+    if not has_images and not has_drawings:
+        return None
+
+    return f"[FIGURE: page {page_number}]"
+
+
+def _preprocess_image_for_ocr(page: fitz.Page) -> np.ndarray:
+    pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+    image = Image.open(io.BytesIO(pix.tobytes("png")))
+    arr = np.array(image)
+    if arr.ndim == 3:
+        gray = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+    else:
+        gray = arr
+
+    blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+    thresh = cv2.adaptiveThreshold(
+        blurred,
+        255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY,
+        31,
+        15,
+    )
+
+    coords = np.column_stack(np.where(thresh < 255))
+    if coords.size > 0:
+        angle = cv2.minAreaRect(coords)[-1]
+        if angle < -45:
+            angle = -(90 + angle)
+        else:
+            angle = -angle
+
+        h, w = thresh.shape[:2]
+        center = (w // 2, h // 2)
+        matrix = cv2.getRotationMatrix2D(center, angle, 1.0)
+        deskewed = cv2.warpAffine(
+            thresh,
+            matrix,
+            (w, h),
+            flags=cv2.INTER_CUBIC,
+            borderMode=cv2.BORDER_REPLICATE,
+        )
+        return deskewed
+    return thresh
+
+
+def _extract_pdf_text_with_hybrid_ocr(file_bytes: bytes) -> Dict[str, Any]:
+    try:
+        document = fitz.open(stream=file_bytes, filetype="pdf")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid PDF file: {exc}") from exc
+
+    pages_output: List[str] = []
+    page_count = document.page_count
+    ocr_pages = 0
+    warnings: Set[str] = set()
+
+    for idx in range(page_count):
+        page = document[idx]
+        page_number = idx + 1
+        direct_text = page.get_text("text") or ""
+        normalized_direct = _normalize_whitespace(direct_text)
+        page_text = direct_text
+        used_ocr = False
+
+        if len(normalized_direct) < PDF_TEXT_THRESHOLD:
+            try:
+                processed = _preprocess_image_for_ocr(page)
+                ocr_text = pytesseract.image_to_string(processed, config=OCR_CONFIG).strip()
+                if ocr_text:
+                    page_text = ocr_text
+                    used_ocr = True
+            except pytesseract.TesseractNotFoundError:
+                warnings.add("tesseract_not_installed")
+            except Exception:
+                warnings.add(f"ocr_failed_page_{page_number}")
+
+        structured_page_text = _format_table_and_text_blocks(page_text, page_number)
+        figure_marker = _page_figure_placeholder(page, direct_text, page_number)
+        if figure_marker:
+            structured_page_text = f"{structured_page_text}\n\n{figure_marker}".strip()
+
+        if structured_page_text:
+            pages_output.append(structured_page_text)
+        if used_ocr:
+            ocr_pages += 1
+
+    document.close()
+    return {
+        "text": "\n\n".join([page for page in pages_output if page]).strip(),
+        "page_count": page_count,
+        "ocr_pages": ocr_pages,
+        "warnings": sorted(warnings),
+    }
 
 
 def _split_requirement_sections(raw_text: str) -> List[Dict[str, str]]:
@@ -334,11 +500,13 @@ def _split_sections(raw_text: str) -> List[Dict[str, Any]]:
     return [{"section_title": f"Section {i + 1}", "content": p} for i, p in enumerate(paragraphs)]
 
 
-@router.post("/requirements/ingest", response_model=IngestRequirementsResponse)
-async def ingest_requirements(
+def _persist_requirements_from_text(
     request: IngestRequirementsRequest,
-    supabase=Depends(get_supabase_client),
-):
+    supabase: Any,
+    page_count: int | None = None,
+    ocr_pages: int | None = None,
+    extraction_warnings: List[str] | None = None,
+) -> IngestRequirementsResponse:
     if not request.raw_text.strip():
         raise HTTPException(status_code=400, detail="raw_text cannot be empty")
 
@@ -403,14 +571,19 @@ async def ingest_requirements(
     return IngestRequirementsResponse(
         requirements_document_id=document["id"],
         chunk_count=len(rows),
+        page_count=page_count,
+        ocr_pages=ocr_pages,
+        extraction_warnings=extraction_warnings or [],
     )
 
 
-@router.post("/work/ingest", response_model=IngestWorkDocumentResponse)
-async def ingest_work_document(
+def _persist_work_from_text(
     request: IngestWorkDocumentRequest,
-    supabase=Depends(get_supabase_client),
-):
+    supabase: Any,
+    page_count: int | None = None,
+    ocr_pages: int | None = None,
+    extraction_warnings: List[str] | None = None,
+) -> IngestWorkDocumentResponse:
     if not request.raw_text.strip():
         raise HTTPException(status_code=400, detail="raw_text cannot be empty")
 
@@ -473,6 +646,102 @@ async def ingest_work_document(
             )
             for section in inserted_sections
         ],
+        page_count=page_count,
+        ocr_pages=ocr_pages,
+        extraction_warnings=extraction_warnings or [],
+    )
+
+
+@router.post("/requirements/ingest", response_model=IngestRequirementsResponse)
+async def ingest_requirements(
+    request: IngestRequirementsRequest,
+    supabase=Depends(get_supabase_client),
+):
+    return _persist_requirements_from_text(request, supabase)
+
+
+@router.post("/work/ingest", response_model=IngestWorkDocumentResponse)
+async def ingest_work_document(
+    request: IngestWorkDocumentRequest,
+    supabase=Depends(get_supabase_client),
+):
+    return _persist_work_from_text(request, supabase)
+
+
+@router.post("/requirements/ingest-pdf", response_model=IngestRequirementsResponse)
+async def ingest_requirements_pdf(
+    organization_id: str = Form(...),
+    uploaded_by: str = Form(...),
+    title: str = Form(...),
+    source_name: str | None = Form(None),
+    file: UploadFile = File(...),
+    supabase=Depends(get_supabase_client),
+):
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="File must be a PDF.")
+
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded PDF is empty.")
+
+    extracted = _extract_pdf_text_with_hybrid_ocr(file_bytes)
+    if not extracted["text"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not extract usable text from PDF. Try a clearer file or ensure OCR is available.",
+        )
+
+    request = IngestRequirementsRequest(
+        organization_id=organization_id,
+        uploaded_by=uploaded_by,
+        title=title,
+        raw_text=extracted["text"],
+        source_name=source_name or file.filename,
+        source_type="pdf",
+    )
+    return _persist_requirements_from_text(
+        request,
+        supabase,
+        page_count=extracted["page_count"],
+        ocr_pages=extracted["ocr_pages"],
+        extraction_warnings=extracted["warnings"],
+    )
+
+
+@router.post("/work/ingest-pdf", response_model=IngestWorkDocumentResponse)
+async def ingest_work_pdf(
+    organization_id: str = Form(...),
+    uploaded_by: str = Form(...),
+    title: str = Form(...),
+    file: UploadFile = File(...),
+    supabase=Depends(get_supabase_client),
+):
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="File must be a PDF.")
+
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Uploaded PDF is empty.")
+
+    extracted = _extract_pdf_text_with_hybrid_ocr(file_bytes)
+    if not extracted["text"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not extract usable text from PDF. Try a clearer file or ensure OCR is available.",
+        )
+
+    request = IngestWorkDocumentRequest(
+        organization_id=organization_id,
+        uploaded_by=uploaded_by,
+        title=title,
+        raw_text=extracted["text"],
+    )
+    return _persist_work_from_text(
+        request,
+        supabase,
+        page_count=extracted["page_count"],
+        ocr_pages=extracted["ocr_pages"],
+        extraction_warnings=extracted["warnings"],
     )
 
 
