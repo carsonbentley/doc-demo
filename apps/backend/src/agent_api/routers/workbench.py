@@ -27,6 +27,7 @@ CHUNK_SIZE = 900
 CHUNK_OVERLAP = 120
 PDF_TEXT_THRESHOLD = 80
 OCR_CONFIG = "--oem 3 --psm 6"
+PDF_DEBUG_PREVIEW_CHARS = 8000
 
 
 class IngestRequirementsRequest(BaseModel):
@@ -89,6 +90,16 @@ class LinkRequirementsResponse(BaseModel):
 
 def _normalize_whitespace(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _insert_heading_line_breaks(text: str) -> str:
+    """Recover section boundaries when PDF extraction collapses headings inline."""
+    updated = text
+    updated = re.sub(r"\s+(Section\s+\d+[A-Za-z]?\s*[:\-])", r"\n\1", updated, flags=re.IGNORECASE)
+    updated = re.sub(r"\s+(\d+\.\d+(?:\.\d+)?\s+[A-Z][^:\n]{1,120}:)", r"\n\1", updated)
+    updated = re.sub(r"\s+(\d+\.\s+[A-Z][^:\n]{1,120}:)", r"\n\1", updated)
+    updated = re.sub(r"\s+-\s(?=[A-Za-z])", r"\n- ", updated)
+    return updated
 
 
 def _line_looks_like_table_row(line: str) -> bool:
@@ -243,13 +254,27 @@ def _extract_pdf_text_with_hybrid_ocr(file_bytes: bytes) -> Dict[str, Any]:
     }
 
 
+def _debug_log_pdf_extraction(endpoint_name: str, filename: str, extracted: Dict[str, Any]) -> None:
+    preview = (extracted.get("text") or "")[:PDF_DEBUG_PREVIEW_CHARS]
+    print(
+        (
+            f"[PDF DEBUG] endpoint={endpoint_name} file={filename} "
+            f"pages={extracted.get('page_count')} ocr_pages={extracted.get('ocr_pages')} "
+            f"warnings={extracted.get('warnings', [])} extracted_chars={len(extracted.get('text') or '')}"
+        )
+    )
+    print(f"[PDF DEBUG] extracted_text_preview_start\n{preview}\n[PDF DEBUG] extracted_text_preview_end")
+
+
 def _split_requirement_sections(raw_text: str) -> List[Dict[str, str]]:
-    lines = [line.rstrip() for line in raw_text.splitlines()]
+    normalized_input = _insert_heading_line_breaks(raw_text)
+    lines = [line.rstrip() for line in normalized_input.splitlines()]
     sections: List[Dict[str, str]] = []
 
     heading_regexes = [
-        re.compile(r"^(Section\s+\d+[A-Za-z]?)\s*[–\-:]\s*(.+)$", re.IGNORECASE),
-        re.compile(r"^(\d+(?:\.\d+)+)\s+(.+)$"),
+        re.compile(r"^(Section\s+\d+[A-Za-z]?)\s*(?:[–\-:]|\.)\s*(.+)$", re.IGNORECASE),
+        re.compile(r"^(\d+(?:\.\d+)+)\s*(?:[–\-:]|\.)?\s+(.+)$"),
+        re.compile(r"^(\d+)\.\s+(.+)$"),
         re.compile(r"^(Section\s+\d+[A-Za-z]?)\s+(.+)$", re.IGNORECASE),
     ]
 
@@ -462,12 +487,16 @@ def _strip_leading_numbering(text: str) -> str:
 
 def _split_sections(raw_text: str) -> List[Dict[str, Any]]:
     # Try heading-based split first.
-    lines = [line.strip() for line in raw_text.splitlines()]
+    normalized_input = _insert_heading_line_breaks(raw_text)
+    lines = [line.strip() for line in normalized_input.splitlines()]
     sections: List[Dict[str, Any]] = []
     current_title = "Introduction"
     current_lines: List[str] = []
 
-    heading_pattern = re.compile(r"^(\d+(\.\d+)*)\s+.+")
+    heading_patterns = [
+        re.compile(r"^Section\s+\d+[A-Za-z]?\s*[:\-].+$", re.IGNORECASE),
+        re.compile(r"^(\d+(?:\.\d+)*)\.?\s+[A-Z].+$"),
+    ]
 
     def flush_section() -> None:
         nonlocal current_title, current_lines
@@ -485,7 +514,7 @@ def _split_sections(raw_text: str) -> List[Dict[str, Any]]:
         if not line:
             current_lines.append(line)
             continue
-        if heading_pattern.match(line) or (line.isupper() and len(line) <= 90):
+        if any(pattern.match(line) for pattern in heading_patterns) or (line.isupper() and len(line) <= 90):
             flush_section()
             current_title = line
             continue
@@ -685,6 +714,7 @@ async def ingest_requirements_pdf(
         raise HTTPException(status_code=400, detail="Uploaded PDF is empty.")
 
     extracted = _extract_pdf_text_with_hybrid_ocr(file_bytes)
+    _debug_log_pdf_extraction("requirements/ingest-pdf", file.filename, extracted)
     if not extracted["text"]:
         raise HTTPException(
             status_code=400,
@@ -724,6 +754,7 @@ async def ingest_work_pdf(
         raise HTTPException(status_code=400, detail="Uploaded PDF is empty.")
 
     extracted = _extract_pdf_text_with_hybrid_ocr(file_bytes)
+    _debug_log_pdf_extraction("work/ingest-pdf", file.filename, extracted)
     if not extracted["text"]:
         raise HTTPException(
             status_code=400,
