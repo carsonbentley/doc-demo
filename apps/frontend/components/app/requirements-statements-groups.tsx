@@ -1,6 +1,9 @@
 'use client';
 
+import { useEffect, useMemo, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
 
 type RequirementStatement = {
   id: string;
@@ -40,25 +43,89 @@ export function RequirementsStatementsGroups({ groups }: RequirementsStatementsG
   const cleanSectionTitle = (title: string) =>
     title.replace(/^section\s+\d+(?:\.\d+)*\s*[:\-]?\s*/i, '').trim() || title;
 
+  const [search, setSearch] = useState('');
+  const [activeVerb, setActiveVerb] = useState<string>('shall');
+  const [visibleCount, setVisibleCount] = useState(20);
+
+  useEffect(() => {
+    const preferred = groups.find((group) => ['shall', 'requires'].includes(group.modal_verb) && group.count > 0);
+    const fallback = groups.find((group) => group.count > 0);
+    setActiveVerb(preferred?.modal_verb || fallback?.modal_verb || groups[0]?.modal_verb || 'shall');
+  }, [groups]);
+
+  const activeGroup = useMemo(
+    () => groups.find((group) => group.modal_verb === activeVerb) || groups[0],
+    [groups, activeVerb]
+  );
+
+  const filteredItems = useMemo(() => {
+    if (!activeGroup) return [];
+    const query = search.trim().toLowerCase();
+    if (!query) return activeGroup.items;
+    return activeGroup.items.filter((statement) => {
+      const haystack = [
+        statement.requirement_summary,
+        statement.distilled_text,
+        statement.statement_text,
+        statement.source_quote,
+        statement.section_title,
+        statement.section_reference,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [activeGroup, search]);
+
+  const visibleItems = filteredItems.slice(0, visibleCount);
+
   return (
     <div className="space-y-4">
-      {groups.map((group) => (
-        <Card key={group.modal_verb}>
-          <CardHeader>
-            <CardTitle className="flex items-center justify-between text-base">
-              <span>{group.category_label}</span>
-              <span
-                className={`rounded-full px-2 py-1 text-xs font-medium ${VERB_BADGE_STYLES[group.modal_verb] || 'bg-gray-100 text-gray-700'}`}
+      <Card>
+        <CardHeader className="space-y-3">
+          <CardTitle className="text-base">Extracted Requirements</CardTitle>
+          <div className="flex flex-wrap gap-2">
+            {groups.map((group) => (
+              <button
+                key={group.modal_verb}
+                type="button"
+                onClick={() => {
+                  setActiveVerb(group.modal_verb);
+                  setVisibleCount(20);
+                }}
+                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                  activeVerb === group.modal_verb
+                    ? VERB_BADGE_STYLES[group.modal_verb] || 'bg-gray-900 text-white'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
               >
                 {group.modal_verb.toUpperCase()} · {group.count}
-              </span>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {group.items.length === 0 ? (
-              <p className="text-sm text-gray-500">No statements found in this category.</p>
-            ) : (
-              group.items.map((statement) => (
+              </button>
+            ))}
+          </div>
+          <Input
+            value={search}
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setVisibleCount(20);
+            }}
+            placeholder="Search requirement summary, source quote, or section..."
+          />
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {activeGroup ? (
+            <p className="text-sm text-gray-600">
+              Showing <span className="font-medium">{activeGroup.category_label}</span> requirements (
+              {filteredItems.length} result{filteredItems.length === 1 ? '' : 's'})
+            </p>
+          ) : null}
+
+          {filteredItems.length === 0 ? (
+            <p className="text-sm text-gray-500">No statements found for this filter.</p>
+          ) : (
+            <div className="space-y-3">
+              {visibleItems.map((statement) => (
                 <details key={statement.id} className="rounded-md border p-3">
                   <summary className="cursor-pointer list-none">
                     <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-gray-600">
@@ -93,11 +160,19 @@ export function RequirementsStatementsGroups({ groups }: RequirementsStatementsG
                     ) : null}
                   </div>
                 </details>
-              ))
-            )}
-          </CardContent>
-        </Card>
-      ))}
+              ))}
+            </div>
+          )}
+
+          {visibleCount < filteredItems.length ? (
+            <div className="pt-2">
+              <Button type="button" variant="outline" onClick={() => setVisibleCount((count) => count + 20)}>
+                Load 20 More
+              </Button>
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
     </div>
   );
 }
