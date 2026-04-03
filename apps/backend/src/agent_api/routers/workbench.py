@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
+import logging
+import threading
 import io
 import json
 import math
 import re
-from typing import Any, Dict, List, Set
+from typing import Any, Callable, Dict, Iterable, List, Set
 
 import fitz  # PyMuPDF
 import numpy as np
@@ -22,6 +25,7 @@ from ..config import settings
 from ..supabase_client import get_supabase_client
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 EMBEDDING_DIMENSION = 1536
 CHUNK_SIZE = 900
@@ -94,12 +98,14 @@ class LinkRequirementsResponse(BaseModel):
 class RequirementsStatusResponse(BaseModel):
     organization_id: str
     indexed: bool
+    processing_status: str | None = None
     latest_requirements_document_id: str | None = None
     latest_title: str | None = None
     latest_source_type: str | None = None
     latest_source_name: str | None = None
     latest_raw_text: str | None = None
     chunk_count: int = 0
+    statement_count: int = 0
     indexed_at: str | None = None
     page_count: int | None = None
     ocr_pages: int | None = None
@@ -630,14 +636,14 @@ def _distill_statement_with_llm(
         }
 
 
-def _extract_requirement_statements(raw_text: str) -> List[Dict[str, Any]]:
+def _iter_requirement_statement_candidates(raw_text: str):
     sections = _split_requirement_sections(raw_text)
-    extracted: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
 
     for section in sections:
         section_title = section["section_title"]
         units = _split_statement_units(section["content"])
-        last_statement_index: int | None = None
+        pending_note: str | None = None
 
         for unit in units:
             cleaned_unit = _normalize_whitespace(unit)
@@ -645,14 +651,7 @@ def _extract_requirement_statements(raw_text: str) -> List[Dict[str, Any]]:
                 continue
 
             if re.match(r"^(note)\b[:\-]?", cleaned_unit, flags=re.IGNORECASE):
-                if last_statement_index is not None:
-                    existing_note = extracted[last_statement_index].get("note_text") or ""
-                    combined_note = (
-                        f"{existing_note} {_clean_extracted_sentence(cleaned_unit)}".strip()
-                        if existing_note
-                        else _clean_extracted_sentence(cleaned_unit)
-                    )
-                    extracted[last_statement_index]["note_text"] = combined_note
+                pending_note = _clean_extracted_sentence(cleaned_unit)
                 continue
 
             modal_clauses = _extract_modal_clauses(cleaned_unit)
@@ -661,47 +660,57 @@ def _extract_requirement_statements(raw_text: str) -> List[Dict[str, Any]]:
                 statement_text = _normalize_whitespace(clause["clause_text"])
                 if not statement_text:
                     continue
+                dedupe_key = f"{verb}::{statement_text.lower()}"
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
 
-                distilled = _distill_statement_with_llm(
-                    section_title=section_title,
-                    modal_verb=verb,
-                    source_quote=statement_text,
-                )
+                yield {
+                    "section_title": section_title,
+                    "modal_verb": verb,
+                    "category_label": MODAL_LABELS[verb],
+                    "statement_text": statement_text,
+                    "statement_text_normalized": statement_text.lower(),
+                    "note_text": pending_note,
+                    "source_page": None,
+                    "source_block_type": "text",
+                    "metadata": {
+                        "section_id": section["section_id"],
+                        "source": "deterministic_modal_parser",
+                    },
+                }
+                pending_note = None
 
-                extracted.append(
-                    {
-                        "section_title": section_title,
-                        "modal_verb": verb,
-                        "category_label": MODAL_LABELS[verb],
-                        "statement_text": statement_text,
-                        "statement_text_normalized": statement_text.lower(),
-                        "note_text": None,
-                        "source_page": None,
-                        "source_block_type": "text",
-                        "metadata": {
-                            "section_id": section["section_id"],
-                            "source": "deterministic_modal_parser",
-                            "requirement_summary": distilled.get("requirement_summary"),
-                            "section_reference": distilled.get("section_reference"),
-                            "distilled_text": distilled.get("distilled_text"),
-                            "quantitative_constraints": distilled.get("quantitative_constraints", []),
-                            "acceptance_criteria": distilled.get("acceptance_criteria"),
-                            "distillation_validation_passed": distilled.get("validation_passed"),
-                            "distillation_used_llm": distilled.get("used_llm"),
-                        },
-                    }
-                )
-                last_statement_index = len(extracted) - 1
 
-    deduped: List[Dict[str, Any]] = []
-    seen: Set[str] = set()
-    for statement in extracted:
-        dedupe_key = f"{statement['modal_verb']}::{statement['statement_text_normalized']}"
-        if dedupe_key in seen:
-            continue
-        seen.add(dedupe_key)
-        deduped.append(statement)
-    return deduped
+def _distill_statement_record(statement: Dict[str, Any]) -> Dict[str, Any]:
+    distilled = _distill_statement_with_llm(
+        section_title=statement["section_title"],
+        modal_verb=statement["modal_verb"],
+        source_quote=statement["statement_text"],
+    )
+    metadata = statement.get("metadata") or {}
+    return {
+        **statement,
+        "metadata": {
+            **metadata,
+            "requirement_summary": distilled.get("requirement_summary"),
+            "section_reference": distilled.get("section_reference"),
+            "distilled_text": distilled.get("distilled_text"),
+            "quantitative_constraints": distilled.get("quantitative_constraints", []),
+            "acceptance_criteria": distilled.get("acceptance_criteria"),
+            "distillation_validation_passed": distilled.get("validation_passed"),
+            "distillation_used_llm": distilled.get("used_llm"),
+        },
+    }
+
+
+def _iter_requirement_statements(raw_text: str):
+    for statement in _iter_requirement_statement_candidates(raw_text):
+        yield _distill_statement_record(statement)
+
+
+def _extract_requirement_statements(raw_text: str) -> List[Dict[str, Any]]:
+    return list(_iter_requirement_statements(raw_text))
 
 
 def _chunk_single_section(
@@ -977,44 +986,141 @@ def _split_sections(raw_text: str) -> List[Dict[str, Any]]:
     return [{"section_title": f"Section {i + 1}", "content": p} for i, p in enumerate(paragraphs)]
 
 
+STATEMENT_INSERT_BATCH = 4
+
+
+class _RequirementsDocProgress:
+    """Thread-safe merged metadata writes for parallel chunk + statement ingestion."""
+
+    def __init__(
+        self,
+        *,
+        supabase: Any,
+        document_id: str,
+        base_metadata: Dict[str, Any],
+        statement_candidates_total: int,
+        chunk_total: int,
+    ) -> None:
+        self._supabase = supabase
+        self._document_id = document_id
+        self._base = dict(base_metadata)
+        self._statement_candidates_total = statement_candidates_total
+        self._chunk_total = chunk_total
+        self._lock = threading.Lock()
+        self.chunk_count = 0
+        self.statement_count = 0
+
+    def _flush(self, processing_status: str) -> None:
+        meta = {
+            **self._base,
+            "chunk_count": self.chunk_count,
+            "chunk_total": self._chunk_total,
+            "statement_count": self.statement_count,
+            "statement_candidates_total": self._statement_candidates_total,
+            "processing_status": processing_status,
+        }
+        try:
+            self._supabase.table("requirements_documents").update({"metadata": meta}).eq("id", self._document_id).execute()
+        except Exception as exc:
+            logger.warning(
+                "requirements_documents metadata update failed (doc_id=%s): %s",
+                self._document_id,
+                exc,
+            )
+
+    def add_chunks(self, delta: int, processing_status: str | None = None) -> None:
+        with self._lock:
+            self.chunk_count += delta
+            if processing_status is None:
+                processing_status = "distilling" if self.statement_count > 0 else "indexing"
+            self._flush(processing_status)
+
+    def set_statement_count(self, count: int, processing_status: str = "distilling") -> None:
+        with self._lock:
+            self.statement_count = count
+            self._flush(processing_status)
+
+    def touch(self, processing_status: str = "indexing") -> None:
+        with self._lock:
+            self._flush(processing_status)
+
+    def finalize(self, *, chunk_count: int, statement_count: int) -> None:
+        with self._lock:
+            self.chunk_count = chunk_count
+            self.statement_count = statement_count
+            self._flush("indexed")
+
+
 def _persist_requirement_statements(
     *,
     organization_id: str,
     requirements_document_id: str,
-    statements: List[Dict[str, Any]],
+    statements: Iterable[Dict[str, Any]],
     supabase: Any,
+    on_progress: Callable[[int], None] | None = None,
 ) -> int:
-    if not statements:
+    statement_candidates = list(statements)
+    if not statement_candidates:
         return 0
 
-    rows = []
-    for idx, statement in enumerate(statements):
-        rows.append(
-            {
-                "organization_id": organization_id,
-                "requirements_document_id": requirements_document_id,
-                "statement_order": idx + 1,
-                "section_title": statement["section_title"],
-                "modal_verb": statement["modal_verb"],
-                "statement_text": statement["statement_text"],
-                "statement_text_normalized": statement["statement_text_normalized"],
-                "note_text": statement.get("note_text"),
-                "source_page": statement.get("source_page"),
-                "source_block_type": statement.get("source_block_type"),
-                "metadata": statement.get("metadata") or {},
-            }
-        )
-    try:
-        supabase.table("requirements_statements").insert(rows).execute()
-    except Exception as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                "Failed writing requirement statements to Supabase. "
-                "Verify backend Supabase credentials/project and migrations."
-            ),
-        ) from exc
-    return len(rows)
+    max_workers = min(8, max(1, len(statement_candidates)))
+    batch_rows: List[Dict[str, Any]] = []
+    inserted = 0
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_idx = {
+            executor.submit(_distill_statement_record, statement): idx
+            for idx, statement in enumerate(statement_candidates)
+        }
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            statement = future.result()
+            batch_rows.append(
+                {
+                    "organization_id": organization_id,
+                    "requirements_document_id": requirements_document_id,
+                    "statement_order": idx + 1,
+                    "section_title": statement["section_title"],
+                    "modal_verb": statement["modal_verb"],
+                    "statement_text": statement["statement_text"],
+                    "statement_text_normalized": statement["statement_text_normalized"],
+                    "note_text": statement.get("note_text"),
+                    "source_page": statement.get("source_page"),
+                    "source_block_type": statement.get("source_block_type"),
+                    "metadata": statement.get("metadata") or {},
+                }
+            )
+            if len(batch_rows) >= STATEMENT_INSERT_BATCH:
+                try:
+                    supabase.table("requirements_statements").insert(batch_rows).execute()
+                except Exception as exc:
+                    raise HTTPException(
+                        status_code=502,
+                        detail=(
+                            "Failed writing requirement statements to Supabase. "
+                            "Verify backend Supabase credentials/project and migrations."
+                        ),
+                    ) from exc
+                inserted += len(batch_rows)
+                batch_rows = []
+                if on_progress:
+                    on_progress(inserted)
+
+    if batch_rows:
+        try:
+            supabase.table("requirements_statements").insert(batch_rows).execute()
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "Failed writing requirement statements to Supabase. "
+                    "Verify backend Supabase credentials/project and migrations."
+                ),
+            ) from exc
+        inserted += len(batch_rows)
+        if on_progress:
+            on_progress(inserted)
+    return inserted
 
 
 def _persist_requirements_from_text(
@@ -1035,6 +1141,7 @@ def _persist_requirements_from_text(
             document_metadata["ocr_pages"] = ocr_pages
         if extraction_warnings:
             document_metadata["extraction_warnings"] = extraction_warnings
+        document_metadata["processing_status"] = "indexing"
         doc_result = supabase.table("requirements_documents").insert(
             {
                 "organization_id": request.organization_id,
@@ -1059,51 +1166,94 @@ def _persist_requirements_from_text(
         raise HTTPException(status_code=500, detail="Failed to create requirements document")
 
     document = doc_result.data[0]
-    chunks = _chunk_requirements_document(request.raw_text)
-    statements = _extract_requirement_statements(request.raw_text)
+    doc_id = document["id"]
 
-    rows: List[Dict[str, Any]] = []
-    for index, chunk in enumerate(chunks):
-        chunk_text = chunk["chunk_text"]
-        metadata = chunk["metadata"]
-        embedding = _embed_text(chunk_text)
-        rows.append(
-            {
-                "organization_id": request.organization_id,
-                "requirements_document_id": document["id"],
-                "chunk_index": index,
-                "chunk_text": chunk_text,
-                "embedding": _to_vector_literal(embedding),
-                "metadata": {
-                    "source_name": request.source_name,
-                    "title": request.title,
-                    **metadata,
-                },
-            }
+    extracted_statements = list(_iter_requirement_statement_candidates(request.raw_text))
+    statement_candidates_total = len(extracted_statements)
+    chunks = _chunk_requirements_document(request.raw_text)
+
+    progress = _RequirementsDocProgress(
+        supabase=supabase,
+        document_id=doc_id,
+        base_metadata=document_metadata,
+        statement_candidates_total=statement_candidates_total,
+        chunk_total=len(chunks),
+    )
+    progress.touch("indexing")
+
+    def run_chunk_ingest() -> int:
+        inserted_chunk_count = 0
+        chunk_batch: List[Dict[str, Any]] = []
+        for index, chunk in enumerate(chunks):
+            chunk_text = chunk["chunk_text"]
+            metadata = chunk["metadata"]
+            embedding = _embed_text(chunk_text)
+            chunk_batch.append(
+                {
+                    "organization_id": request.organization_id,
+                    "requirements_document_id": doc_id,
+                    "chunk_index": index,
+                    "chunk_text": chunk_text,
+                    "embedding": _to_vector_literal(embedding),
+                    "metadata": {
+                        "source_name": request.source_name,
+                        "title": request.title,
+                        **metadata,
+                    },
+                }
+            )
+            if len(chunk_batch) >= 10:
+                try:
+                    supabase.table("requirements_chunks").insert(chunk_batch).execute()
+                except Exception as exc:
+                    raise HTTPException(
+                        status_code=502,
+                        detail=(
+                            "Failed writing requirement chunks to Supabase. "
+                            "Verify backend Supabase credentials/project."
+                        ),
+                    ) from exc
+                inserted_chunk_count += len(chunk_batch)
+                progress.add_chunks(len(chunk_batch))
+                chunk_batch = []
+
+        if chunk_batch:
+            try:
+                supabase.table("requirements_chunks").insert(chunk_batch).execute()
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        "Failed writing requirement chunks to Supabase. "
+                        "Verify backend Supabase credentials/project."
+                    ),
+                ) from exc
+            inserted_chunk_count += len(chunk_batch)
+            progress.add_chunks(len(chunk_batch))
+        return inserted_chunk_count
+
+    def run_statement_ingest() -> int:
+        if not extracted_statements:
+            return 0
+        return _persist_requirement_statements(
+            organization_id=request.organization_id,
+            requirements_document_id=doc_id,
+            statements=extracted_statements,
+            supabase=supabase,
+            on_progress=lambda n: progress.set_statement_count(n, "distilling"),
         )
 
-    if rows:
-        try:
-            supabase.table("requirements_chunks").insert(rows).execute()
-        except Exception as exc:
-            raise HTTPException(
-                status_code=502,
-                detail=(
-                    "Failed writing requirement chunks to Supabase. "
-                    "Verify backend Supabase credentials/project."
-                ),
-            ) from exc
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        future_chunks = pool.submit(run_chunk_ingest)
+        future_statements = pool.submit(run_statement_ingest)
+        inserted_chunk_count = future_chunks.result()
+        statement_count = future_statements.result()
 
-    statement_count = _persist_requirement_statements(
-        organization_id=request.organization_id,
-        requirements_document_id=document["id"],
-        statements=statements,
-        supabase=supabase,
-    )
+    progress.finalize(chunk_count=inserted_chunk_count, statement_count=statement_count)
 
     return IngestRequirementsResponse(
         requirements_document_id=document["id"],
-        chunk_count=len(rows),
+        chunk_count=inserted_chunk_count,
         statement_count=statement_count,
         page_count=page_count,
         ocr_pages=ocr_pages,
@@ -1496,15 +1646,35 @@ async def requirements_status(
 
     metadata = latest_doc.get("metadata") or {}
     chunk_count = count_result.count or 0
+    try:
+        statement_count_result = (
+            supabase.table("requirements_statements")
+            .select("id", count="exact")
+            .eq("organization_id", organization_id)
+            .eq("requirements_document_id", latest_doc["id"])
+            .execute()
+        )
+        statement_count = statement_count_result.count or 0
+    except Exception:
+        statement_count = 0
+    processing_status = metadata.get("processing_status")
+    if processing_status == "indexed":
+        indexed = True
+    elif processing_status in {"indexing", "distilling"}:
+        indexed = False
+    else:
+        indexed = chunk_count > 0
     return RequirementsStatusResponse(
         organization_id=organization_id,
-        indexed=chunk_count > 0,
+        indexed=indexed,
+        processing_status=processing_status,
         latest_requirements_document_id=latest_doc["id"],
         latest_title=latest_doc.get("title"),
         latest_source_type=latest_doc.get("source_type"),
         latest_source_name=latest_doc.get("source_name"),
         latest_raw_text=latest_doc.get("raw_text"),
         chunk_count=chunk_count,
+        statement_count=statement_count,
         indexed_at=latest_doc.get("created_at"),
         page_count=metadata.get("page_count"),
         ocr_pages=metadata.get("ocr_pages"),

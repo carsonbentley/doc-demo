@@ -50,7 +50,14 @@ export function RequirementsStatementsGroups({ groups }: RequirementsStatementsG
   useEffect(() => {
     const preferred = groups.find((group) => ['shall', 'requires'].includes(group.modal_verb) && group.count > 0);
     const fallback = groups.find((group) => group.count > 0);
-    setActiveVerb(preferred?.modal_verb || fallback?.modal_verb || groups[0]?.modal_verb || 'shall');
+    const next =
+      preferred?.modal_verb || fallback?.modal_verb || groups[0]?.modal_verb || 'shall';
+
+    setActiveVerb((prev) => {
+      const prevStillValid = groups.some((g) => g.modal_verb === prev && g.count > 0);
+      if (prevStillValid) return prev;
+      return next;
+    });
   }, [groups]);
 
   const activeGroup = useMemo(

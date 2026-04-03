@@ -24,12 +24,16 @@ type InputMode = 'text' | 'pdf';
 
 type RequirementsStatus = {
   indexed: boolean;
+  processing_status?: string | null;
   latest_requirements_document_id: string | null;
   latest_title: string | null;
   latest_source_type: string | null;
   latest_source_name: string | null;
   latest_raw_text: string | null;
   chunk_count: number;
+  chunk_total?: number;
+  statement_count?: number;
+  statement_candidates_total?: number;
 };
 
 type LinkedSection = {
@@ -105,7 +109,7 @@ export default function SowUploadPage() {
     try {
       const latestDocResult = await supabase
         .from('requirements_documents')
-        .select('id, title, source_type, source_name, raw_text, created_at')
+        .select('id, title, source_type, source_name, raw_text, metadata, created_at')
         .eq('organization_id', organizationId)
         .order('created_at', { ascending: false })
         .limit(1);
@@ -131,15 +135,37 @@ export default function SowUploadPage() {
         .eq('requirements_document_id', latest.id);
 
       const chunkCount = countResult.count || 0;
-      const indexed = chunkCount > 0;
+      const metadata =
+        (latest.metadata as {
+          processing_status?: string;
+          chunk_total?: number;
+          statement_count?: number;
+          statement_candidates_total?: number;
+        } | null) ?? null;
+      const chunkTotal = metadata?.chunk_total;
+      const statementCount = metadata?.statement_count ?? 0;
+      const statementCandidatesTotal = metadata?.statement_candidates_total;
+      const processingStatus = metadata?.processing_status ?? null;
+      const indexed =
+        processingStatus === 'indexed'
+          ? true
+          : processingStatus === 'indexing' || processingStatus === 'distilling'
+            ? false
+            : chunkCount > 0;
+
+      setIndexing(!indexed);
       setStatus({
         indexed,
+        processing_status: processingStatus,
         latest_requirements_document_id: latest.id,
         latest_title: latest.title,
         latest_source_type: latest.source_type,
         latest_source_name: latest.source_name,
         latest_raw_text: latest.raw_text,
         chunk_count: chunkCount,
+        chunk_total: chunkTotal,
+        statement_count: statementCount,
+        statement_candidates_total: statementCandidatesTotal,
       });
       return indexed;
     } catch {
@@ -155,13 +181,13 @@ export default function SowUploadPage() {
     const tick = async () => {
       const indexed = await pollRequirementsStatus();
       if (cancelled) return;
-      if (indexed) setIndexing(false);
+      setIndexing(!indexed);
     };
 
     void tick();
     const intervalId = setInterval(() => {
       void tick();
-    }, 3000);
+    }, 1500);
 
     return () => {
       cancelled = true;
@@ -234,7 +260,7 @@ export default function SowUploadPage() {
 
   useEffect(() => {
     const loadStatements = async () => {
-      if (!status?.latest_requirements_document_id || !status.indexed) {
+      if (!status?.latest_requirements_document_id) {
         setStatementGroups([]);
         return;
       }
@@ -250,7 +276,11 @@ export default function SowUploadPage() {
       }
     };
     void loadStatements();
-  }, [status?.latest_requirements_document_id, status?.indexed, organizationId]);
+    const pollId = setInterval(() => {
+      void loadStatements();
+    }, 1500);
+    return () => clearInterval(pollId);
+  }, [status?.latest_requirements_document_id, organizationId]);
 
   const ingestWorkDocument = async (): Promise<string> => {
     if (!userId) throw new Error('You must be signed in.');
@@ -347,7 +377,15 @@ export default function SowUploadPage() {
         </Button>
       </div>
 
-      <RequirementsStepProgress indexed={Boolean(status?.indexed)} currentStep={2} indexing={indexing} />
+      <RequirementsStepProgress
+        indexed={Boolean(status?.indexed)}
+        currentStep={2}
+        indexing={indexing}
+        chunkCount={status?.chunk_count ?? 0}
+        chunkTotal={status?.chunk_total}
+        statementCount={status?.statement_count ?? 0}
+        statementCandidatesTotal={status?.statement_candidates_total}
+      />
       {error ? <div className="rounded-md bg-red-50 p-3 text-sm text-red-700">{error}</div> : null}
 
       <div className="grid gap-6 lg:grid-cols-2">
@@ -358,12 +396,12 @@ export default function SowUploadPage() {
             sourceName={status?.latest_source_name}
             rawText={status?.latest_raw_text}
           />
-          {status?.indexed ? (
+          {status?.latest_requirements_document_id ? (
             <RequirementsStatementsGroups groups={statementGroups} />
           ) : (
             <Card>
               <CardContent className="py-6 text-sm text-gray-600">
-                Requirements statements will appear here after indexing completes.
+                Requirements statements will appear here as distillation progresses.
               </CardContent>
             </Card>
           )}
@@ -425,11 +463,7 @@ export default function SowUploadPage() {
               >
                 {submitting ? 'Uploading and Linking...' : 'Upload SOW and Generate Links'}
               </Button>
-              {indexing ? (
-                <p className="text-xs text-blue-700">
-                  Requirements are still indexing in the background. You can prepare your SOW now.
-                </p>
-              ) : !status?.indexed ? (
+              {!indexing && !status?.indexed ? (
                 <p className="text-xs text-amber-700">Requirements indexing has not completed yet.</p>
               ) : null}
             </CardContent>

@@ -4,7 +4,7 @@ Supabase client for the AI API.
 import os
 import httpx
 from dotenv import load_dotenv
-from typing import Optional, Dict, Any, List
+from typing import Any, Dict, List, Optional, Union
 
 # Load environment variables from .env file
 load_dotenv()
@@ -39,9 +39,13 @@ class TableInterface:
         """Select columns from table."""
         return QueryBuilder(self.client, self.base_url, 'GET', columns)
 
-    def insert(self, data: Dict[str, Any]):
-        """Insert data into table."""
+    def insert(self, data: Union[Dict[str, Any], List[Dict[str, Any]]]):
+        """Insert one row (dict) or many (list of dicts)."""
         return QueryBuilder(self.client, self.base_url, 'POST', data=data)
+
+    def update(self, data: Dict[str, Any]):
+        """Patch row(s); chain .eq(...) filters before execute()."""
+        return QueryBuilder(self.client, self.base_url, 'PATCH', data=data)
 
     def upsert(self, data: Dict[str, Any]):
         """Upsert data into table."""
@@ -100,6 +104,8 @@ class QueryBuilder:
                 response = client.get(url, headers=self.headers)
             elif self.method == 'POST':
                 response = client.post(url, headers=self.headers, json=self.data)
+            elif self.method == 'PATCH':
+                response = client.patch(url, headers=self.headers, json=self.data)
             elif self.method == 'DELETE':
                 response = client.delete(url, headers=self.headers)
             else:
