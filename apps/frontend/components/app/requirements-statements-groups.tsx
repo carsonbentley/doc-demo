@@ -37,6 +37,9 @@ const VERB_BADGE_STYLES: Record<string, string> = {
 };
 
 export function RequirementsStatementsGroups({ groups }: RequirementsStatementsGroupsProps) {
+  const cleanSectionTitle = (title: string) =>
+    title.replace(/^section\s+\d+(?:\.\d+)*\s*[:\-]?\s*/i, '').trim() || title;
+
   return (
     <div className="space-y-4">
       {groups.map((group) => (
@@ -60,7 +63,6 @@ export function RequirementsStatementsGroups({ groups }: RequirementsStatementsG
                   <summary className="cursor-pointer list-none">
                     <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-gray-600">
                       <span className="rounded bg-gray-100 px-2 py-1">#{statement.statement_order}</span>
-                      <span className="rounded bg-gray-100 px-2 py-1">{statement.section_title}</span>
                       {statement.section_reference ? (
                         <span className="rounded bg-indigo-100 px-2 py-1 text-indigo-700">
                           {statement.section_reference}
@@ -70,6 +72,9 @@ export function RequirementsStatementsGroups({ groups }: RequirementsStatementsG
                         <span className="rounded bg-gray-100 px-2 py-1">Page {statement.source_page}</span>
                       ) : null}
                     </div>
+                    <p className="mb-1 line-clamp-1 text-xs text-gray-600">
+                      {cleanSectionTitle(statement.section_title)}
+                    </p>
                     <p className="line-clamp-2 text-sm font-medium text-gray-900">
                       {statement.requirement_summary || statement.distilled_text || statement.statement_text}
                     </p>
