@@ -44,7 +44,11 @@ type RequirementStatement = {
   section_title: string;
   modal_verb: string;
   category_label: string;
+  requirement_summary?: string | null;
+  section_reference?: string | null;
   statement_text: string;
+  distilled_text?: string | null;
+  source_quote?: string | null;
   note_text?: string | null;
   source_page?: number | null;
 };

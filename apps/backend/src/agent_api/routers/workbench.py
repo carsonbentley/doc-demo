@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import math
 import re
 from typing import Any, Dict, List, Set
@@ -28,6 +29,7 @@ CHUNK_OVERLAP = 120
 PDF_TEXT_THRESHOLD = 80
 OCR_CONFIG = "--oem 3 --psm 6"
 PDF_DEBUG_PREVIEW_CHARS = 8000
+DISTILL_MAX_INPUT_CHARS = 1400
 
 
 class IngestRequirementsRequest(BaseModel):
@@ -148,7 +150,11 @@ class RequirementStatementItem(BaseModel):
     section_title: str
     modal_verb: str
     category_label: str
+    requirement_summary: str | None = None
+    section_reference: str | None = None
     statement_text: str
+    distilled_text: str | None = None
+    source_quote: str | None = None
     note_text: str | None = None
     source_page: int | None = None
 
@@ -431,6 +437,8 @@ MODAL_LABELS = {
 
 def _split_statement_units(text: str) -> List[str]:
     normalized = _insert_heading_line_breaks(text)
+    normalized = re.sub(r"\s+(\d+\.\d+\s+[A-Z][^:\n]{1,140}:)", r"\n\1", normalized)
+    normalized = re.sub(r"\s+(\d+\.\s+[A-Z][^:\n]{1,140}:)", r"\n\1", normalized)
     normalized = normalized.replace("\r\n", "\n").replace("\r", "\n")
     normalized = re.sub(r"\n{2,}", "\n", normalized)
     normalized = re.sub(r"\s+", " ", normalized.replace("\n", " \n ")).strip()
@@ -457,12 +465,169 @@ def _split_statement_units(text: str) -> List[str]:
     return [u for u in units if u]
 
 
+def _clean_extracted_sentence(text: str) -> str:
+    cleaned = text
+    cleaned = re.sub(r"\[TABLE:\s*page\s*\d+\]", " ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\[FIGURE:[^\]]*\]", " ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bpage\s+\d+\b", " ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
+def _extract_modal_clauses(text: str) -> List[Dict[str, str]]:
+    cleaned_text = _clean_extracted_sentence(text)
+    if not cleaned_text:
+        return []
+
+    clauses: List[Dict[str, str]] = []
+    lower = cleaned_text.lower()
+    for verb in MODAL_VERBS:
+        for match in re.finditer(rf"\b{re.escape(verb)}\b", lower):
+            start = match.start()
+            end = match.end()
+
+            # Expand to nearest punctuation boundaries around modal keyword.
+            left_boundary = max(
+                cleaned_text.rfind(".", 0, start),
+                cleaned_text.rfind(";", 0, start),
+                cleaned_text.rfind(":", 0, start),
+            )
+            right_candidates = [
+                idx for idx in (
+                    cleaned_text.find(".", end),
+                    cleaned_text.find(";", end),
+                    cleaned_text.find(":", end),
+                ) if idx != -1
+            ]
+            right_boundary = min(right_candidates) if right_candidates else len(cleaned_text)
+
+            clause = cleaned_text[left_boundary + 1:right_boundary + 1].strip()
+            if len(clause) < 20:
+                continue
+            if len(clause) > 420:
+                continue
+            if clause.count(" ") < 4:
+                continue
+
+            clauses.append({"modal_verb": verb, "clause_text": clause})
+    return clauses
+
+
 def _extract_modal_verb(statement: str) -> str | None:
     lower = statement.lower()
     for verb in MODAL_VERBS:
         if re.search(rf"\b{re.escape(verb)}\b", lower):
             return verb
     return None
+
+
+def _extract_section_reference_from_title(section_title: str) -> str | None:
+    match = re.search(r"(section\s+\d+(?:\.\d+)*)", section_title, flags=re.IGNORECASE)
+    if match:
+        return match.group(1)
+    match = re.search(r"^(\d+(?:\.\d+)*)", section_title)
+    if match:
+        return match.group(1)
+    return None
+
+
+def _distill_statement_heuristic(statement_text: str, modal_verb: str) -> str:
+    cleaned = _normalize_whitespace(statement_text)
+    cleaned = re.sub(r"^(note)\s*[:\-]\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"^\d+(?:\.\d+)*\s*", "", cleaned)
+    if not re.search(rf"\b{re.escape(modal_verb)}\b", cleaned, flags=re.IGNORECASE):
+        cleaned = f"The subject {modal_verb} {cleaned}".strip()
+    return cleaned
+
+
+def _build_requirement_summary(text: str, max_words: int = 20) -> str:
+    words = text.split()
+    if len(words) <= max_words:
+        return text
+    return " ".join(words[:max_words]).rstrip(",;:.") + "..."
+
+
+def _validate_distilled_fidelity(source_quote: str, distilled_text: str) -> bool:
+    source_nums = _extract_numeric_tokens(source_quote)
+    if not source_nums:
+        return True
+    distilled_nums = _extract_numeric_tokens(distilled_text)
+    return source_nums.issubset(distilled_nums)
+
+
+def _distill_statement_with_llm(
+    *,
+    section_title: str,
+    modal_verb: str,
+    source_quote: str,
+) -> Dict[str, Any]:
+    fallback = _distill_statement_heuristic(source_quote, modal_verb)
+    fallback_summary = _build_requirement_summary(fallback)
+    fallback_section_reference = _extract_section_reference_from_title(section_title)
+    if not settings.openai_api_key:
+        return {
+            "requirement_summary": fallback_summary,
+            "section_reference": fallback_section_reference,
+            "distilled_text": fallback,
+            "validation_passed": _validate_distilled_fidelity(source_quote, fallback),
+            "used_llm": False,
+        }
+
+    prompt = (
+        "You are a compliance requirements normalizer.\n"
+        "Rewrite ONE requirement into a concise atomic statement while preserving exact numeric values, ranges, and units.\n"
+        "Do not invent any content.\n"
+        "Return ONLY valid JSON object with keys: requirement_summary, section_reference, distilled_text, quantitative_constraints, acceptance_criteria.\n"
+        "requirement_summary must be <= 20 words and easy to scan.\n"
+        "section_reference should preserve source section id if present (e.g., 'Section 4.1').\n"
+        "distilled_text must keep the original modal verb semantics.\n"
+    )
+    user_payload = {
+        "section_title": section_title,
+        "modal_verb": modal_verb,
+        "source_quote": source_quote[:DISTILL_MAX_INPUT_CHARS],
+    }
+    try:
+        client = OpenAI(api_key=settings.openai_api_key)
+        response = client.responses.create(
+            model=settings.openai_model,
+            input=[
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": json.dumps(user_payload)},
+            ],
+            temperature=0,
+        )
+        text_output = response.output_text.strip()
+        parsed = json.loads(text_output)
+        distilled_text = _normalize_whitespace(str(parsed.get("distilled_text", "")).strip())
+        if not distilled_text:
+            distilled_text = fallback
+        requirement_summary = _normalize_whitespace(str(parsed.get("requirement_summary", "")).strip())
+        if not requirement_summary:
+            requirement_summary = _build_requirement_summary(distilled_text)
+        section_reference = _normalize_whitespace(str(parsed.get("section_reference", "")).strip())
+        if not section_reference:
+            section_reference = fallback_section_reference
+        validation_passed = _validate_distilled_fidelity(source_quote, distilled_text)
+        if not validation_passed:
+            distilled_text = fallback
+        return {
+            "requirement_summary": requirement_summary,
+            "section_reference": section_reference,
+            "distilled_text": distilled_text,
+            "quantitative_constraints": parsed.get("quantitative_constraints", []),
+            "acceptance_criteria": parsed.get("acceptance_criteria"),
+            "validation_passed": validation_passed,
+            "used_llm": True,
+        }
+    except Exception:
+        return {
+            "requirement_summary": fallback_summary,
+            "section_reference": fallback_section_reference,
+            "distilled_text": fallback,
+            "validation_passed": _validate_distilled_fidelity(source_quote, fallback),
+            "used_llm": False,
+        }
 
 
 def _extract_requirement_statements(raw_text: str) -> List[Dict[str, Any]]:
@@ -475,38 +640,58 @@ def _extract_requirement_statements(raw_text: str) -> List[Dict[str, Any]]:
         last_statement_index: int | None = None
 
         for unit in units:
-            cleaned = _normalize_whitespace(unit)
-            if not cleaned:
+            cleaned_unit = _normalize_whitespace(unit)
+            if not cleaned_unit:
                 continue
 
-            if re.match(r"^(note)\b[:\-]?", cleaned, flags=re.IGNORECASE):
+            if re.match(r"^(note)\b[:\-]?", cleaned_unit, flags=re.IGNORECASE):
                 if last_statement_index is not None:
                     existing_note = extracted[last_statement_index].get("note_text") or ""
-                    combined_note = f"{existing_note} {cleaned}".strip() if existing_note else cleaned
+                    combined_note = (
+                        f"{existing_note} {_clean_extracted_sentence(cleaned_unit)}".strip()
+                        if existing_note
+                        else _clean_extracted_sentence(cleaned_unit)
+                    )
                     extracted[last_statement_index]["note_text"] = combined_note
                 continue
 
-            verb = _extract_modal_verb(cleaned)
-            if not verb:
-                continue
+            modal_clauses = _extract_modal_clauses(cleaned_unit)
+            for clause in modal_clauses:
+                verb = clause["modal_verb"]
+                statement_text = _normalize_whitespace(clause["clause_text"])
+                if not statement_text:
+                    continue
 
-            extracted.append(
-                {
-                    "section_title": section_title,
-                    "modal_verb": verb,
-                    "category_label": MODAL_LABELS[verb],
-                    "statement_text": cleaned,
-                    "statement_text_normalized": cleaned.lower(),
-                    "note_text": None,
-                    "source_page": None,
-                    "source_block_type": "text",
-                    "metadata": {
-                        "section_id": section["section_id"],
-                        "source": "deterministic_modal_parser",
-                    },
-                }
-            )
-            last_statement_index = len(extracted) - 1
+                distilled = _distill_statement_with_llm(
+                    section_title=section_title,
+                    modal_verb=verb,
+                    source_quote=statement_text,
+                )
+
+                extracted.append(
+                    {
+                        "section_title": section_title,
+                        "modal_verb": verb,
+                        "category_label": MODAL_LABELS[verb],
+                        "statement_text": statement_text,
+                        "statement_text_normalized": statement_text.lower(),
+                        "note_text": None,
+                        "source_page": None,
+                        "source_block_type": "text",
+                        "metadata": {
+                            "section_id": section["section_id"],
+                            "source": "deterministic_modal_parser",
+                            "requirement_summary": distilled.get("requirement_summary"),
+                            "section_reference": distilled.get("section_reference"),
+                            "distilled_text": distilled.get("distilled_text"),
+                            "quantitative_constraints": distilled.get("quantitative_constraints", []),
+                            "acceptance_criteria": distilled.get("acceptance_criteria"),
+                            "distillation_validation_passed": distilled.get("validation_passed"),
+                            "distillation_used_llm": distilled.get("used_llm"),
+                        },
+                    }
+                )
+                last_statement_index = len(extracted) - 1
 
     deduped: List[Dict[str, Any]] = []
     seen: Set[str] = set()
@@ -1339,7 +1524,7 @@ async def requirements_statements(
         rows_result = (
             supabase.table("requirements_statements")
             .select(
-                "id, statement_order, section_title, modal_verb, statement_text, note_text, source_page"
+                "id, statement_order, section_title, modal_verb, statement_text, note_text, source_page, metadata"
             )
             .eq("organization_id", organization_id)
             .eq("requirements_document_id", requirements_document_id)
@@ -1356,6 +1541,7 @@ async def requirements_statements(
         verb = (row.get("modal_verb") or "").lower()
         if verb not in grouped:
             continue
+        metadata = row.get("metadata") or {}
         grouped[verb].append(
             RequirementStatementItem(
                 id=row["id"],
@@ -1363,7 +1549,17 @@ async def requirements_statements(
                 section_title=row["section_title"],
                 modal_verb=verb,
                 category_label=MODAL_LABELS[verb],
+                requirement_summary=metadata.get("requirement_summary")
+                or _build_requirement_summary(
+                    _normalize_whitespace(
+                        str(metadata.get("distilled_text") or row["statement_text"])
+                    )
+                ),
+                section_reference=metadata.get("section_reference")
+                or _extract_section_reference_from_title(row["section_title"]),
                 statement_text=row["statement_text"],
+                distilled_text=metadata.get("distilled_text"),
+                source_quote=row["statement_text"],
                 note_text=row.get("note_text"),
                 source_page=row.get("source_page"),
             )
