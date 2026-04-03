@@ -85,20 +85,20 @@ export function CreateOrganizationModal({ open, onOpenChange, onOrganizationCrea
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[425px]">
         <DialogHeader>
-          <DialogTitle>Add New Organization</DialogTitle>
+          <DialogTitle>New Requirement Document</DialogTitle>
           <DialogDescription>
-            Add a new organization to manage requirements and SOW traceability work.
+            Create a new requirement document workspace for upload, indexing, and SOW linking.
           </DialogDescription>
         </DialogHeader>
         
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="name">Organization Name *</Label>
+            <Label htmlFor="name">Requirement Document Name *</Label>
             <Input
               id="name"
               value={formData.name}
               onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-              placeholder="e.g., Falcon Avionics Team"
+              placeholder="e.g., DO-160 Baseline"
               required
             />
           </div>
@@ -109,13 +109,13 @@ export function CreateOrganizationModal({ open, onOpenChange, onOrganizationCrea
               id="description"
               value={formData.description}
               onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-              placeholder="Optional context for this organization"
+              placeholder="Optional context for this requirement document"
               rows={3}
             />
           </div>
           
           <div className="space-y-2">
-            <Label htmlFor="dueDate">Due Date (Optional)</Label>
+            <Label htmlFor="dueDate">Target Date (Optional)</Label>
             <Input
               id="dueDate"
               type="date"
@@ -129,7 +129,7 @@ export function CreateOrganizationModal({ open, onOpenChange, onOrganizationCrea
               Cancel
             </Button>
             <Button type="submit" disabled={loading || !formData.name.trim()}>
-              {loading ? 'Adding...' : 'Add Organization'}
+              {loading ? 'Creating...' : 'Create Document'}
             </Button>
           </DialogFooter>
         </form>

@@ -42,6 +42,7 @@ class IngestRequirementsRequest(BaseModel):
 class IngestRequirementsResponse(BaseModel):
     requirements_document_id: str
     chunk_count: int
+    statement_count: int = 0
     page_count: int | None = None
     ocr_pages: int | None = None
     extraction_warnings: List[str] = []
@@ -86,6 +87,91 @@ class SectionLinkResult(BaseModel):
 
 class LinkRequirementsResponse(BaseModel):
     linked_sections: List[SectionLinkResult]
+
+
+class RequirementsStatusResponse(BaseModel):
+    organization_id: str
+    indexed: bool
+    latest_requirements_document_id: str | None = None
+    latest_title: str | None = None
+    latest_source_type: str | None = None
+    latest_source_name: str | None = None
+    latest_raw_text: str | None = None
+    chunk_count: int = 0
+    indexed_at: str | None = None
+    page_count: int | None = None
+    ocr_pages: int | None = None
+
+
+class WorkHistoryItem(BaseModel):
+    work_document_id: str
+    title: str
+    created_at: str
+    section_count: int
+    link_count: int
+
+
+class WorkHistoryResponse(BaseModel):
+    organization_id: str
+    items: List[WorkHistoryItem]
+
+
+class WorkHistoryLinkItem(BaseModel):
+    requirements_chunk_id: str
+    chunk_index: int
+    chunk_text: str
+    requirements_document_id: str
+    metadata: Dict[str, Any]
+    similarity: float
+    rationale: str | None = None
+
+
+class WorkHistorySectionItem(BaseModel):
+    work_section_id: str
+    section_title: str
+    section_order: int
+    content: str
+    links: List[WorkHistoryLinkItem]
+
+
+class WorkHistoryDetailResponse(BaseModel):
+    organization_id: str
+    work_document_id: str
+    title: str
+    created_at: str
+    sections: List[WorkHistorySectionItem]
+
+
+class RequirementStatementItem(BaseModel):
+    id: str
+    statement_order: int
+    section_title: str
+    modal_verb: str
+    category_label: str
+    statement_text: str
+    note_text: str | None = None
+    source_page: int | None = None
+
+
+class RequirementStatementGroup(BaseModel):
+    modal_verb: str
+    category_label: str
+    count: int
+    items: List[RequirementStatementItem]
+
+
+class RequirementStatementsResponse(BaseModel):
+    organization_id: str
+    requirements_document_id: str
+    total_count: int
+    groups: List[RequirementStatementGroup]
+
+
+class RequirementStatementsSummaryResponse(BaseModel):
+    organization_id: str
+    requirements_document_id: str
+    total_count: int
+    by_modal_verb: Dict[str, int]
 
 
 def _normalize_whitespace(text: str) -> str:
@@ -314,6 +400,11 @@ def _split_requirement_sections(raw_text: str) -> List[Dict[str, str]]:
             identifier = re.sub(r"[^a-z0-9_]", "", identifier) or "section"
             current_id = identifier
             current_title = line
+            inline_parts = re.split(r"\s*[–\-:]\s*", line, maxsplit=1)
+            if len(inline_parts) == 2:
+                trailing = inline_parts[1].strip()
+                if len(trailing.split()) >= 4:
+                    current_lines.append(trailing)
             continue
 
         current_lines.append(raw_line)
@@ -326,6 +417,106 @@ def _split_requirement_sections(raw_text: str) -> List[Dict[str, str]]:
     if not content:
         return []
     return [{"section_id": "section_1", "section_title": "Section 1", "content": content}]
+
+
+MODAL_VERBS = ("shall", "requires", "should", "may", "can")
+MODAL_LABELS = {
+    "shall": "Requirements",
+    "requires": "Requirements",
+    "should": "Recommendations",
+    "may": "Permissions",
+    "can": "Capabilities",
+}
+
+
+def _split_statement_units(text: str) -> List[str]:
+    normalized = _insert_heading_line_breaks(text)
+    normalized = normalized.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = re.sub(r"\n{2,}", "\n", normalized)
+    normalized = re.sub(r"\s+", " ", normalized.replace("\n", " \n ")).strip()
+    normalized = normalized.replace(" \n ", "\n")
+
+    units: List[str] = []
+    current = ""
+    for token in re.split(r"(\n|(?<=[.!?;:])\s+)", normalized):
+        if token is None or token == "":
+            continue
+        if token == "\n":
+            if current.strip():
+                units.append(current.strip())
+                current = ""
+            continue
+        if re.match(r"(?<=[.!?;:])\s+", token):
+            if current.strip():
+                units.append(current.strip())
+                current = ""
+            continue
+        current += token
+    if current.strip():
+        units.append(current.strip())
+    return [u for u in units if u]
+
+
+def _extract_modal_verb(statement: str) -> str | None:
+    lower = statement.lower()
+    for verb in MODAL_VERBS:
+        if re.search(rf"\b{re.escape(verb)}\b", lower):
+            return verb
+    return None
+
+
+def _extract_requirement_statements(raw_text: str) -> List[Dict[str, Any]]:
+    sections = _split_requirement_sections(raw_text)
+    extracted: List[Dict[str, Any]] = []
+
+    for section in sections:
+        section_title = section["section_title"]
+        units = _split_statement_units(section["content"])
+        last_statement_index: int | None = None
+
+        for unit in units:
+            cleaned = _normalize_whitespace(unit)
+            if not cleaned:
+                continue
+
+            if re.match(r"^(note)\b[:\-]?", cleaned, flags=re.IGNORECASE):
+                if last_statement_index is not None:
+                    existing_note = extracted[last_statement_index].get("note_text") or ""
+                    combined_note = f"{existing_note} {cleaned}".strip() if existing_note else cleaned
+                    extracted[last_statement_index]["note_text"] = combined_note
+                continue
+
+            verb = _extract_modal_verb(cleaned)
+            if not verb:
+                continue
+
+            extracted.append(
+                {
+                    "section_title": section_title,
+                    "modal_verb": verb,
+                    "category_label": MODAL_LABELS[verb],
+                    "statement_text": cleaned,
+                    "statement_text_normalized": cleaned.lower(),
+                    "note_text": None,
+                    "source_page": None,
+                    "source_block_type": "text",
+                    "metadata": {
+                        "section_id": section["section_id"],
+                        "source": "deterministic_modal_parser",
+                    },
+                }
+            )
+            last_statement_index = len(extracted) - 1
+
+    deduped: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    for statement in extracted:
+        dedupe_key = f"{statement['modal_verb']}::{statement['statement_text_normalized']}"
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        deduped.append(statement)
+    return deduped
 
 
 def _chunk_single_section(
@@ -481,6 +672,73 @@ def _keyword_overlap_score(a: str, b: str) -> float:
     return len(intersection) / max(len(a_tokens), 1)
 
 
+def _extract_numeric_tokens(text: str) -> Set[str]:
+    values = re.findall(r"\b\d+(?:\.\d+)?\b", text)
+    return {value.lstrip("0") or "0" for value in values}
+
+
+def _numeric_overlap_score(a: str, b: str) -> float:
+    a_nums = _extract_numeric_tokens(a)
+    b_nums = _extract_numeric_tokens(b)
+    if not a_nums:
+        return 0.0
+    if not b_nums:
+        return 0.0
+    return len(a_nums.intersection(b_nums)) / max(len(a_nums), 1)
+
+
+PROCEDURE_TERMS: Set[str] = {
+    "procedure",
+    "procedures",
+    "monitor",
+    "record",
+    "test",
+    "testing",
+    "chamber",
+    "cycle",
+    "cycling",
+    "acceptance",
+    "criteria",
+    "compliance",
+    "degradation",
+    "performance",
+}
+
+
+def _procedure_overlap_score(a: str, b: str) -> float:
+    a_tokens = _extract_tokens(a).intersection(PROCEDURE_TERMS)
+    b_tokens = _extract_tokens(b).intersection(PROCEDURE_TERMS)
+    if not a_tokens:
+        return 0.0
+    if not b_tokens:
+        return 0.0
+    return len(a_tokens.intersection(b_tokens)) / max(len(a_tokens), 1)
+
+
+def _extract_section_references(text: str) -> Set[str]:
+    refs: Set[str] = set()
+    for match in re.findall(r"\bsection\s+(\d+(?:\.\d+)?)\b", text, flags=re.IGNORECASE):
+        refs.add(match)
+    for match in re.findall(r"\b(\d+\.\d+)\b", text):
+        refs.add(match)
+    return refs
+
+
+def _section_reference_score(a: str, b: str) -> float:
+    a_refs = _extract_section_references(a)
+    b_refs = _extract_section_references(b)
+    if not a_refs:
+        return 0.0
+    if not b_refs:
+        return 0.0
+    return len(a_refs.intersection(b_refs)) / max(len(a_refs), 1)
+
+
+def _is_generic_intro_title(title: str) -> bool:
+    normalized = title.strip().lower()
+    return normalized in {"introduction", "intro", "overview"} or normalized.startswith("introduction ")
+
+
 def _strip_leading_numbering(text: str) -> str:
     return re.sub(r"^\d+(?:\.\d+)*\s*", "", text).strip()
 
@@ -517,6 +775,11 @@ def _split_sections(raw_text: str) -> List[Dict[str, Any]]:
         if any(pattern.match(line) for pattern in heading_patterns) or (line.isupper() and len(line) <= 90):
             flush_section()
             current_title = line
+            inline_parts = re.split(r"\s*[–\-:]\s*", line, maxsplit=1)
+            if len(inline_parts) == 2:
+                trailing = inline_parts[1].strip()
+                if len(trailing.split()) >= 4:
+                    current_lines.append(trailing)
             continue
         current_lines.append(line)
 
@@ -527,6 +790,46 @@ def _split_sections(raw_text: str) -> List[Dict[str, Any]]:
     # Fallback: paragraph blocks.
     paragraphs = [p.strip() for p in raw_text.split("\n\n") if p.strip()]
     return [{"section_title": f"Section {i + 1}", "content": p} for i, p in enumerate(paragraphs)]
+
+
+def _persist_requirement_statements(
+    *,
+    organization_id: str,
+    requirements_document_id: str,
+    statements: List[Dict[str, Any]],
+    supabase: Any,
+) -> int:
+    if not statements:
+        return 0
+
+    rows = []
+    for idx, statement in enumerate(statements):
+        rows.append(
+            {
+                "organization_id": organization_id,
+                "requirements_document_id": requirements_document_id,
+                "statement_order": idx + 1,
+                "section_title": statement["section_title"],
+                "modal_verb": statement["modal_verb"],
+                "statement_text": statement["statement_text"],
+                "statement_text_normalized": statement["statement_text_normalized"],
+                "note_text": statement.get("note_text"),
+                "source_page": statement.get("source_page"),
+                "source_block_type": statement.get("source_block_type"),
+                "metadata": statement.get("metadata") or {},
+            }
+        )
+    try:
+        supabase.table("requirements_statements").insert(rows).execute()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Failed writing requirement statements to Supabase. "
+                "Verify backend Supabase credentials/project and migrations."
+            ),
+        ) from exc
+    return len(rows)
 
 
 def _persist_requirements_from_text(
@@ -540,6 +843,13 @@ def _persist_requirements_from_text(
         raise HTTPException(status_code=400, detail="raw_text cannot be empty")
 
     try:
+        document_metadata = {}
+        if page_count is not None:
+            document_metadata["page_count"] = page_count
+        if ocr_pages is not None:
+            document_metadata["ocr_pages"] = ocr_pages
+        if extraction_warnings:
+            document_metadata["extraction_warnings"] = extraction_warnings
         doc_result = supabase.table("requirements_documents").insert(
             {
                 "organization_id": request.organization_id,
@@ -548,6 +858,7 @@ def _persist_requirements_from_text(
                 "source_type": request.source_type,
                 "source_name": request.source_name,
                 "raw_text": request.raw_text,
+                "metadata": document_metadata,
             }
         ).execute()
     except Exception as exc:
@@ -564,6 +875,7 @@ def _persist_requirements_from_text(
 
     document = doc_result.data[0]
     chunks = _chunk_requirements_document(request.raw_text)
+    statements = _extract_requirement_statements(request.raw_text)
 
     rows: List[Dict[str, Any]] = []
     for index, chunk in enumerate(chunks):
@@ -597,9 +909,17 @@ def _persist_requirements_from_text(
                 ),
             ) from exc
 
+    statement_count = _persist_requirement_statements(
+        organization_id=request.organization_id,
+        requirements_document_id=document["id"],
+        statements=statements,
+        supabase=supabase,
+    )
+
     return IngestRequirementsResponse(
         requirements_document_id=document["id"],
         chunk_count=len(rows),
+        statement_count=statement_count,
         page_count=page_count,
         ocr_pages=ocr_pages,
         extraction_warnings=extraction_warnings or [],
@@ -617,12 +937,20 @@ def _persist_work_from_text(
         raise HTTPException(status_code=400, detail="raw_text cannot be empty")
 
     try:
+        document_metadata = {}
+        if page_count is not None:
+            document_metadata["page_count"] = page_count
+        if ocr_pages is not None:
+            document_metadata["ocr_pages"] = ocr_pages
+        if extraction_warnings:
+            document_metadata["extraction_warnings"] = extraction_warnings
         doc_result = supabase.table("work_documents").insert(
             {
                 "organization_id": request.organization_id,
                 "uploaded_by": request.uploaded_by,
                 "title": request.title,
                 "raw_text": request.raw_text,
+                "metadata": document_metadata,
             }
         ).execute()
     except Exception as exc:
@@ -830,6 +1158,7 @@ async def link_work_sections(
         section_title = section["section_title"]
         section_topic = _strip_leading_numbering(section_title)
         section_query_text = f"{section_title}\n{section_topic}\n{section['content']}"
+        semantic_enabled = bool(settings.openai_api_key)
         scored = []
         for chunk in chunks:
             chunk_embedding = _parse_vector(chunk.get("embedding"))
@@ -837,7 +1166,32 @@ async def link_work_sections(
             chunk_metadata = chunk.get("metadata") or {}
             chunk_title = str(chunk_metadata.get("section_title", ""))
             lexical_score = _keyword_overlap_score(section_query_text, f"{chunk_title}\n{chunk['chunk_text']}")
-            hybrid_score = (0.78 * similarity) + (0.22 * lexical_score)
+            numeric_score = _numeric_overlap_score(section_query_text, f"{chunk_title}\n{chunk['chunk_text']}")
+            procedure_score = _procedure_overlap_score(section_query_text, f"{chunk_title}\n{chunk['chunk_text']}")
+            section_ref_score = _section_reference_score(section_query_text, f"{chunk_title}\n{chunk['chunk_text']}")
+
+            if semantic_enabled:
+                hybrid_score = (
+                    (0.45 * similarity)
+                    + (0.20 * lexical_score)
+                    + (0.20 * numeric_score)
+                    + (0.10 * procedure_score)
+                    + (0.05 * section_ref_score)
+                )
+            else:
+                # If embeddings are deterministic fallback, rely on explicit textual and numeric alignment.
+                hybrid_score = (
+                    (0.05 * similarity)
+                    + (0.45 * lexical_score)
+                    + (0.30 * numeric_score)
+                    + (0.12 * procedure_score)
+                    + (0.08 * section_ref_score)
+                )
+
+            if _is_generic_intro_title(chunk_title):
+                hybrid_score -= 0.18
+            if _extract_numeric_tokens(section_query_text) and not _extract_numeric_tokens(chunk["chunk_text"]):
+                hybrid_score -= 0.08
 
             scored.append(
                 {
@@ -848,21 +1202,35 @@ async def link_work_sections(
                     "metadata": chunk_metadata,
                     "similarity": similarity,
                     "hybrid_score": hybrid_score,
+                    "numeric_score": numeric_score,
+                    "section_ref_score": section_ref_score,
                 }
             )
 
         scored.sort(key=lambda item: item["hybrid_score"], reverse=True)
 
-        filtered = [
-            item for item in scored
-            if item["similarity"] >= request.min_similarity
-            or item["hybrid_score"] >= (request.min_similarity * 0.9)
-        ]
+        if semantic_enabled:
+            filtered = [
+                item for item in scored
+                if item["similarity"] >= request.min_similarity
+                or item["hybrid_score"] >= (request.min_similarity * 0.88)
+            ]
+        else:
+            filtered = [
+                item for item in scored if item["hybrid_score"] >= max(0.14, request.min_similarity * 0.3)
+            ]
+
+        non_intro = [item for item in filtered if not _is_generic_intro_title(str(item.get("metadata", {}).get("section_title", "")))]
+        if non_intro:
+            filtered = non_intro
 
         if not filtered:
-            filtered = [
-                item for item in scored if item["similarity"] >= 0.35
-            ][: max(2, request.max_links_per_section // 2)]
+            if semantic_enabled:
+                filtered = [
+                    item for item in scored if item["similarity"] >= 0.35
+                ][: max(2, request.max_links_per_section // 2)]
+            else:
+                filtered = scored[: max(2, request.max_links_per_section // 2)]
 
         top_matches = filtered[: request.max_links_per_section]
 
@@ -901,3 +1269,326 @@ async def link_work_sections(
             ) from exc
 
     return LinkRequirementsResponse(linked_sections=response_sections)
+
+
+@router.get("/requirements/status", response_model=RequirementsStatusResponse)
+async def requirements_status(
+    organization_id: str,
+    supabase=Depends(get_supabase_client),
+):
+    try:
+        latest_doc_result = (
+            supabase.table("requirements_documents")
+            .select("id, title, source_type, source_name, raw_text, metadata, created_at")
+            .eq("organization_id", organization_id)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Failed to load requirements status from Supabase.",
+        ) from exc
+
+    latest_doc = (latest_doc_result.data or [None])[0]
+    if not latest_doc:
+        return RequirementsStatusResponse(organization_id=organization_id, indexed=False)
+
+    try:
+        count_result = (
+            supabase.table("requirements_chunks")
+            .select("id", count="exact")
+            .eq("organization_id", organization_id)
+            .eq("requirements_document_id", latest_doc["id"])
+            .execute()
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Failed to load requirements chunk counts from Supabase.",
+        ) from exc
+
+    metadata = latest_doc.get("metadata") or {}
+    chunk_count = count_result.count or 0
+    return RequirementsStatusResponse(
+        organization_id=organization_id,
+        indexed=chunk_count > 0,
+        latest_requirements_document_id=latest_doc["id"],
+        latest_title=latest_doc.get("title"),
+        latest_source_type=latest_doc.get("source_type"),
+        latest_source_name=latest_doc.get("source_name"),
+        latest_raw_text=latest_doc.get("raw_text"),
+        chunk_count=chunk_count,
+        indexed_at=latest_doc.get("created_at"),
+        page_count=metadata.get("page_count"),
+        ocr_pages=metadata.get("ocr_pages"),
+    )
+
+
+@router.get(
+    "/requirements/{requirements_document_id}/statements",
+    response_model=RequirementStatementsResponse,
+)
+async def requirements_statements(
+    requirements_document_id: str,
+    organization_id: str,
+    supabase=Depends(get_supabase_client),
+):
+    try:
+        rows_result = (
+            supabase.table("requirements_statements")
+            .select(
+                "id, statement_order, section_title, modal_verb, statement_text, note_text, source_page"
+            )
+            .eq("organization_id", organization_id)
+            .eq("requirements_document_id", requirements_document_id)
+            .order("statement_order", desc=False)
+            .execute()
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Failed to load requirements statements.") from exc
+
+    rows = rows_result.data or []
+    grouped: Dict[str, List[RequirementStatementItem]] = {verb: [] for verb in MODAL_VERBS}
+
+    for row in rows:
+        verb = (row.get("modal_verb") or "").lower()
+        if verb not in grouped:
+            continue
+        grouped[verb].append(
+            RequirementStatementItem(
+                id=row["id"],
+                statement_order=row["statement_order"],
+                section_title=row["section_title"],
+                modal_verb=verb,
+                category_label=MODAL_LABELS[verb],
+                statement_text=row["statement_text"],
+                note_text=row.get("note_text"),
+                source_page=row.get("source_page"),
+            )
+        )
+
+    groups = [
+        RequirementStatementGroup(
+            modal_verb=verb,
+            category_label=MODAL_LABELS[verb],
+            count=len(grouped[verb]),
+            items=grouped[verb],
+        )
+        for verb in MODAL_VERBS
+    ]
+
+    return RequirementStatementsResponse(
+        organization_id=organization_id,
+        requirements_document_id=requirements_document_id,
+        total_count=len(rows),
+        groups=groups,
+    )
+
+
+@router.get(
+    "/requirements/{requirements_document_id}/summary",
+    response_model=RequirementStatementsSummaryResponse,
+)
+async def requirements_statements_summary(
+    requirements_document_id: str,
+    organization_id: str,
+    supabase=Depends(get_supabase_client),
+):
+    try:
+        rows_result = (
+            supabase.table("requirements_statements")
+            .select("modal_verb")
+            .eq("organization_id", organization_id)
+            .eq("requirements_document_id", requirements_document_id)
+            .execute()
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Failed to load requirements statements summary.") from exc
+
+    rows = rows_result.data or []
+    counts = {verb: 0 for verb in MODAL_VERBS}
+    for row in rows:
+        verb = str(row.get("modal_verb", "")).lower()
+        if verb in counts:
+            counts[verb] += 1
+
+    return RequirementStatementsSummaryResponse(
+        organization_id=organization_id,
+        requirements_document_id=requirements_document_id,
+        total_count=len(rows),
+        by_modal_verb=counts,
+    )
+
+
+@router.get("/work/history", response_model=WorkHistoryResponse)
+async def work_history(
+    organization_id: str,
+    supabase=Depends(get_supabase_client),
+):
+    try:
+        work_docs_result = (
+            supabase.table("work_documents")
+            .select("id, title, created_at")
+            .eq("organization_id", organization_id)
+            .order("created_at", desc=True)
+            .execute()
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Failed to load work history from Supabase.") from exc
+
+    work_docs = work_docs_result.data or []
+    if not work_docs:
+        return WorkHistoryResponse(organization_id=organization_id, items=[])
+
+    items: List[WorkHistoryItem] = []
+    for doc in work_docs:
+        doc_id = doc["id"]
+        try:
+            sections_result = (
+                supabase.table("work_sections")
+                .select("id")
+                .eq("organization_id", organization_id)
+                .eq("work_document_id", doc_id)
+                .execute()
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="Failed to load work section history.") from exc
+
+        sections = sections_result.data or []
+        section_ids = [section["id"] for section in sections]
+        link_count = 0
+
+        for section_id in section_ids:
+            try:
+                links_result = (
+                    supabase.table("section_requirement_links")
+                    .select("id", count="exact")
+                    .eq("organization_id", organization_id)
+                    .eq("work_section_id", section_id)
+                    .execute()
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=502, detail="Failed to load section link history.") from exc
+            link_count += links_result.count or 0
+
+        items.append(
+            WorkHistoryItem(
+                work_document_id=doc_id,
+                title=doc["title"],
+                created_at=doc["created_at"],
+                section_count=len(section_ids),
+                link_count=link_count,
+            )
+        )
+    return WorkHistoryResponse(organization_id=organization_id, items=items)
+
+
+@router.get("/work/history/{work_document_id}", response_model=WorkHistoryDetailResponse)
+async def work_history_detail(
+    work_document_id: str,
+    organization_id: str,
+    supabase=Depends(get_supabase_client),
+):
+    try:
+        work_doc_result = (
+            supabase.table("work_documents")
+            .select("id, title, created_at")
+            .eq("organization_id", organization_id)
+            .eq("id", work_document_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Failed to load work document details.") from exc
+
+    work_doc = (work_doc_result.data or [None])[0]
+    if not work_doc:
+        raise HTTPException(status_code=404, detail="Work document not found.")
+
+    try:
+        sections_result = (
+            supabase.table("work_sections")
+            .select("id, section_title, section_order, content")
+            .eq("organization_id", organization_id)
+            .eq("work_document_id", work_document_id)
+            .order("section_order", desc=False)
+            .execute()
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Failed to load work section details.") from exc
+
+    sections = sections_result.data or []
+    links: List[Dict[str, Any]] = []
+    for section in sections:
+        try:
+            section_links_result = (
+                supabase.table("section_requirement_links")
+                .select("work_section_id, requirements_chunk_id, similarity, rationale")
+                .eq("organization_id", organization_id)
+                .eq("work_section_id", section["id"])
+                .execute()
+            )
+            links.extend(section_links_result.data or [])
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="Failed to load section links.") from exc
+
+    chunks_by_id: Dict[str, Dict[str, Any]] = {}
+    for chunk_id in {link["requirements_chunk_id"] for link in links}:
+        try:
+            chunk_result = (
+                supabase.table("requirements_chunks")
+                .select("id, requirements_document_id, chunk_index, chunk_text, metadata")
+                .eq("organization_id", organization_id)
+                .eq("id", chunk_id)
+                .limit(1)
+                .execute()
+            )
+            chunk = (chunk_result.data or [None])[0]
+            if chunk:
+                chunks_by_id[chunk["id"]] = chunk
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="Failed to load linked requirement chunks.") from exc
+
+    links_by_section: Dict[str, List[WorkHistoryLinkItem]] = {}
+    for link in links:
+        chunk = chunks_by_id.get(link["requirements_chunk_id"])
+        if not chunk:
+            continue
+        section_id = link["work_section_id"]
+        if section_id not in links_by_section:
+            links_by_section[section_id] = []
+        links_by_section[section_id].append(
+            WorkHistoryLinkItem(
+                requirements_chunk_id=chunk["id"],
+                chunk_index=chunk["chunk_index"],
+                chunk_text=_excerpt_text(chunk["chunk_text"]),
+                requirements_document_id=chunk["requirements_document_id"],
+                metadata=chunk.get("metadata") or {},
+                similarity=link["similarity"],
+                rationale=link.get("rationale"),
+            )
+        )
+
+    section_items = []
+    for section in sections:
+        section_links = links_by_section.get(section["id"], [])
+        section_links.sort(key=lambda item: item.similarity, reverse=True)
+        section_items.append(
+            WorkHistorySectionItem(
+                work_section_id=section["id"],
+                section_title=section["section_title"],
+                section_order=section["section_order"],
+                content=section["content"],
+                links=section_links,
+            )
+        )
+
+    return WorkHistoryDetailResponse(
+        organization_id=organization_id,
+        work_document_id=work_doc["id"],
+        title=work_doc["title"],
+        created_at=work_doc["created_at"],
+        sections=section_items,
+    )

@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { LoadingSpinner } from '@/components/ui/loading-spinner';
@@ -19,7 +20,7 @@ import {
 
 
 
-interface Organization {
+interface RequirementDocument {
   id: string;
   name: string;
   description: string | null;
@@ -29,11 +30,12 @@ interface Organization {
 }
 
 export default function AppDashboard() {
-  const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const router = useRouter();
+  const [organizations, setOrganizations] = useState<RequirementDocument[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
-  const [organizationToDelete, setOrganizationToDelete] = useState<Organization | null>(null);
+  const [organizationToDelete, setOrganizationToDelete] = useState<RequirementDocument | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
@@ -65,10 +67,10 @@ export default function AppDashboard() {
             .order('created_at', { ascending: false });
 
           if (!reloadError && newOrganizationsData) {
-            setOrganizations(newOrganizationsData as unknown as Organization[]);
+            setOrganizations(newOrganizationsData as unknown as RequirementDocument[]);
           }
         } else {
-          setOrganizations(organizationsData as unknown as Organization[]);
+          setOrganizations(organizationsData as unknown as RequirementDocument[]);
         }
         
         // If we created a default organization, refresh the page to ensure all data is synced
@@ -178,8 +180,8 @@ export default function AppDashboard() {
     }
   };
 
-  const handleOrganizationCreated = async () => {
-    // Reload organizations list to include the new organization
+  const handleOrganizationCreated = async (organizationId: string) => {
+    // Reload requirement documents list to include the new item
     try {
       const supabase = createClient();
       const { data: { user } } = await supabase.auth.getUser();
@@ -190,18 +192,19 @@ export default function AppDashboard() {
           .select('*')
           .order('created_at', { ascending: false });
 
-        setOrganizations((organizationsData as unknown as Organization[]) || []);
+        setOrganizations((organizationsData as unknown as RequirementDocument[]) || []);
       }
     } catch (error) {
       console.error('Error reloading organizations:', error);
     }
+    router.push(`/app/organizations/${organizationId}/requirements`);
   };
 
   const handleViewGuidelines = () => {
     window.open('https://www.rtca.org/content/do-160', '_blank');
   };
 
-  const handleDeleteOrganization = (organization: Organization) => {
+  const handleDeleteOrganization = (organization: RequirementDocument) => {
     setOrganizationToDelete(organization);
     setShowDeleteModal(true);
   };
@@ -235,7 +238,7 @@ export default function AppDashboard() {
   const handleRunComplianceCheck = async () => {
     try {
       // This would trigger a full compliance check across all sections
-      alert('Full compliance check feature coming soon! Select an organization to validate individual sections.');
+      alert('Open a requirement document to run the guided SOW linking flow.');
     } catch (error) {
       console.error('Error running compliance check:', error);
     }
@@ -271,13 +274,13 @@ export default function AppDashboard() {
         </div>
       </div>
 
-      {/* Organizations Overview */}
+      {/* Requirement Documents Overview */}
       <div>
         <div className="flex items-center justify-between mb-6">
-          <h2 className="text-2xl font-semibold">Your Organizations</h2>
+          <h2 className="text-2xl font-semibold">Your Requirement Documents</h2>
           <Button onClick={() => setShowCreateModal(true)}>
             <Plus className="mr-2 h-4 w-4" />
-            Add New Organization
+            New Requirement Document
           </Button>
         </div>
 
@@ -285,13 +288,13 @@ export default function AppDashboard() {
           <Card>
             <CardContent className="text-center py-12">
               <Target className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-              <h3 className="text-lg font-semibold text-gray-900 mb-2">No Organizations Yet</h3>
+              <h3 className="text-lg font-semibold text-gray-900 mb-2">No Requirement Documents Yet</h3>
               <p className="text-gray-600 mb-6">
-                Add your first organization to start linking requirements to SOW sections.
+                Create your first requirement document to start the guided upload and linking flow.
               </p>
               <Button onClick={() => setShowCreateModal(true)}>
                 <Plus className="mr-2 h-4 w-4" />
-                Add Your First Organization
+                Create First Requirement Document
               </Button>
             </CardContent>
           </Card>
@@ -343,9 +346,15 @@ export default function AppDashboard() {
                         <span>Due: {new Date(organization.due_date).toLocaleDateString()}</span>
                       )}
                     </div>
-                    <Link href={`/app/organizations/${organization.id}`}>
+                    <Link href={`/app/organizations/${organization.id}/requirements`}>
                       <Button className="w-full" variant="outline">
-                        <span>Manage Organization</span>
+                        <span>Open Workflow</span>
+                        <ArrowRight className="ml-2 h-4 w-4" />
+                      </Button>
+                    </Link>
+                    <Link href={`/app/organizations/${organization.id}/history`}>
+                      <Button className="w-full" variant="outline">
+                        <span>View SOW History</span>
                         <ArrowRight className="ml-2 h-4 w-4" />
                       </Button>
                     </Link>
@@ -367,7 +376,7 @@ export default function AppDashboard() {
           <div className="flex flex-wrap gap-4">
             <Button variant="outline" onClick={() => setShowCreateModal(true)}>
               <Plus className="mr-2 h-4 w-4" />
-              Add New Organization
+              New Requirement Document
             </Button>
             <Button variant="outline" onClick={handleViewGuidelines}>
               <FileText className="mr-2 h-4 w-4" />
@@ -378,7 +387,7 @@ export default function AppDashboard() {
               onClick={handleRunComplianceCheck}
             >
               <CheckCircle className="mr-2 h-4 w-4" />
-              Run Section Linking Demo
+              Run Guided SOW Linking
             </Button>
           </div>
         </CardContent>

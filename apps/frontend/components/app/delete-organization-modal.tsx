@@ -65,7 +65,7 @@ export function DeleteOrganizationModal({
             </div>
             <div>
               <DialogTitle className="text-lg font-semibold text-gray-900">
-                Delete Organization
+                Delete Requirement Document
               </DialogTitle>
               <DialogDescription className="text-sm text-gray-500">
                 This action cannot be undone.
@@ -79,7 +79,7 @@ export function DeleteOrganizationModal({
             <div className="text-sm text-red-800">
               <p className="font-medium mb-2">This will permanently delete:</p>
               <ul className="list-disc list-inside space-y-1 text-xs">
-                <li>The organization "{organizationName}"</li>
+                <li>The requirement document "{organizationName}"</li>
                 <li>All project records and uploaded files</li>
                 <li>All requirement ingestion and chunk records</li>
                 <li>All section-to-requirement links and citations</li>
@@ -95,7 +95,7 @@ export function DeleteOrganizationModal({
               id="confirmation"
               value={confirmationText}
               onChange={(e) => setConfirmationText(e.target.value)}
-              placeholder="Enter organization name"
+              placeholder="Enter requirement document name"
               className={error ? 'border-red-300 focus:border-red-500 focus:ring-red-500' : ''}
               disabled={isDeleting}
             />
@@ -124,7 +124,7 @@ export function DeleteOrganizationModal({
                 Deleting...
               </>
             ) : (
-              'Delete Organization'
+              'Delete Requirement Document'
             )}
           </Button>
         </DialogFooter>

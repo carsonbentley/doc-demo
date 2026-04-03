@@ -17,7 +17,7 @@ interface AppNavigationProps {
 }
 
 const appSections = [
-  { name: 'Workbench', href: '/app', icon: FileText },
+  { name: 'Requirement Documents', href: '/app', icon: FileText },
 ];
 
 export function AppNavigation({ user }: AppNavigationProps) {
