@@ -127,6 +127,11 @@ class WorkHistoryResponse(BaseModel):
     items: List[WorkHistoryItem]
 
 
+class WorkLastLinkedResponse(BaseModel):
+    organization_id: str
+    work_document_id: str | None = None
+
+
 class WorkHistoryLinkItem(BaseModel):
     requirements_chunk_id: str
     chunk_index: int
@@ -2215,6 +2220,57 @@ async def work_history(
             )
         )
     return WorkHistoryResponse(organization_id=organization_id, items=items)
+
+
+@router.get("/work/last-linked", response_model=WorkLastLinkedResponse)
+async def work_last_linked(
+    organization_id: str,
+    supabase=Depends(get_supabase_client),
+):
+    """Return the work document whose section links were most recently written."""
+    try:
+        links_result = (
+            supabase.table("section_requirement_links")
+            .select("work_section_id, created_at")
+            .eq("organization_id", organization_id)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Failed to load latest section links from Supabase.",
+        ) from exc
+
+    rows = links_result.data or []
+    if not rows:
+        return WorkLastLinkedResponse(organization_id=organization_id, work_document_id=None)
+
+    work_section_id = rows[0]["work_section_id"]
+    try:
+        section_result = (
+            supabase.table("work_sections")
+            .select("work_document_id")
+            .eq("organization_id", organization_id)
+            .eq("id", work_section_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Failed to resolve work document for latest section link.",
+        ) from exc
+
+    section_row = (section_result.data or [None])[0]
+    if not section_row:
+        return WorkLastLinkedResponse(organization_id=organization_id, work_document_id=None)
+
+    return WorkLastLinkedResponse(
+        organization_id=organization_id,
+        work_document_id=str(section_row["work_document_id"]),
+    )
 
 
 @router.get("/work/history/{work_document_id}", response_model=WorkHistoryDetailResponse)

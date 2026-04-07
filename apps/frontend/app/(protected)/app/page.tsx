@@ -346,7 +346,7 @@ export default function AppDashboard() {
                         <span>Due: {new Date(organization.due_date).toLocaleDateString()}</span>
                       )}
                     </div>
-                    <Link href={`/app/organizations/${organization.id}/requirements`}>
+                    <Link href={`/app/organizations/${organization.id}`}>
                       <Button className="w-full" variant="outline">
                         <span>Open Workflow</span>
                         <ArrowRight className="ml-2 h-4 w-4" />

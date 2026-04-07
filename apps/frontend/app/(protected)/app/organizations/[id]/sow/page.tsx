@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { ArrowLeft, Settings } from 'lucide-react';
+import { ArrowLeft, Settings, Upload } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -91,6 +91,37 @@ type StatementSowCitation = {
 const API_BASE_URL =
   (process.env.NEXT_PUBLIC_AGENT_API_URL?.trim() || 'http://127.0.0.1:8002').replace(/\/$/, '');
 
+function mapHistoryDetailToLinkedSections(payload: {
+  sections?: Array<{
+    work_section_id: string;
+    section_title: string;
+    metadata?: Record<string, unknown>;
+    links?: Array<{
+      requirements_chunk_id: string;
+      chunk_index: number;
+      chunk_text: string;
+      requirements_document_id: string;
+      metadata: Record<string, unknown>;
+      similarity: number;
+      rationale?: string | null;
+    }>;
+  }>;
+}): LinkedSection[] {
+  return (payload.sections || []).map((section) => ({
+    work_section_id: section.work_section_id,
+    section_title: section.section_title,
+    work_section_metadata: section.metadata as LinkedSection['work_section_metadata'],
+    links: (section.links || []).map((link) => ({
+      requirements_chunk_id: link.requirements_chunk_id,
+      chunk_text: link.chunk_text,
+      chunk_index: link.chunk_index,
+      requirements_document_id: link.requirements_document_id,
+      similarity: link.similarity,
+      metadata: link.metadata as SectionLink['metadata'],
+    })),
+  }));
+}
+
 export default function SowUploadPage() {
   const params = useParams();
   const searchParams = useSearchParams();
@@ -119,6 +150,7 @@ export default function SowUploadPage() {
   const [sowCitationsLoading, setSowCitationsLoading] = useState(false);
   const [sowLinkSettings, setSowLinkSettings] = useState<SowLinkSettings>(DEFAULT_SOW_LINK_SETTINGS);
   const [sowSettingsOpen, setSowSettingsOpen] = useState(false);
+  const [uploadMoreOpen, setUploadMoreOpen] = useState(false);
   const [sowSettingsDraftOverlapPct, setSowSettingsDraftOverlapPct] = useState(38);
   const [sowSettingsDraftMaxCitations, setSowSettingsDraftMaxCitations] = useState(10);
   const filesInputRef = useRef<HTMLInputElement | null>(null);
@@ -127,6 +159,11 @@ export default function SowUploadPage() {
   useEffect(() => {
     if (!organizationId) return;
     setSowLinkSettings(loadSowLinkSettings(organizationId));
+  }, [organizationId]);
+
+  useEffect(() => {
+    setLinkedWorkDocumentId(null);
+    setLinkedSections([]);
   }, [organizationId]);
 
   useEffect(() => {
@@ -242,7 +279,7 @@ export default function SowUploadPage() {
       cancelled = true;
       clearInterval(intervalId);
     };
-  }, [organizationId, userId]);
+  }, [organizationId, userId, searchParams]);
 
   useEffect(() => {
     const shouldAutoIndex = searchParams.get('autoIndex') === '1';
@@ -263,6 +300,7 @@ export default function SowUploadPage() {
           if (!pending.file) {
             // PDF file cannot survive full refresh. Keep UX non-blocking and ask for re-upload.
             setIndexing(false);
+            router.replace(`/app/organizations/${organizationId}/sow`);
             return;
           }
           const formData = new FormData();
@@ -293,6 +331,7 @@ export default function SowUploadPage() {
 
         if (ok) {
           clearPendingRequirementsPayload();
+          router.replace(`/app/organizations/${organizationId}/sow`);
         } else {
           setTimeout(() => {
             setIndexingStarted(false);
@@ -306,7 +345,7 @@ export default function SowUploadPage() {
     };
 
     void runBackgroundIndexing();
-  }, [searchParams, userId, indexingStarted, organizationId]);
+  }, [searchParams, userId, indexingStarted, organizationId, router]);
 
   useEffect(() => {
     const loadStatements = async () => {
@@ -333,22 +372,52 @@ export default function SowUploadPage() {
   }, [status?.latest_requirements_document_id, organizationId]);
 
   useEffect(() => {
-    const pickLatestLinkedWork = async () => {
-      if (linkedWorkDocumentId || !organizationId) return;
+    if (!organizationId) return;
+    let cancelled = false;
+    const run = async () => {
       try {
-        const response = await fetch(`${API_BASE_URL}/v1/workbench/work/history?organization_id=${organizationId}`);
-        if (!response.ok) return;
+        const response = await fetch(
+          `${API_BASE_URL}/v1/workbench/work/last-linked?organization_id=${encodeURIComponent(organizationId)}`
+        );
+        if (!response.ok || cancelled) return;
         const payload = await response.json();
-        const items = (payload.items || []) as { work_document_id: string; link_count: number }[];
-        const withLinks = items.find((item) => item.link_count > 0);
-        if (withLinks?.work_document_id) {
-          setLinkedWorkDocumentId(withLinks.work_document_id);
+        const id = payload.work_document_id as string | null | undefined;
+        if (!cancelled) {
+          setLinkedWorkDocumentId((prev) => (prev === null ? id ?? null : prev));
         }
       } catch {
         // Non-blocking restore of last linked SOW.
       }
     };
-    void pickLatestLinkedWork();
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [organizationId]);
+
+  useEffect(() => {
+    if (!organizationId || !linkedWorkDocumentId) {
+      setLinkedSections([]);
+      return;
+    }
+    let cancelled = false;
+    const run = async () => {
+      try {
+        const params = new URLSearchParams({ organization_id: organizationId });
+        const response = await fetch(
+          `${API_BASE_URL}/v1/workbench/work/history/${linkedWorkDocumentId}?${params.toString()}`
+        );
+        if (!response.ok || cancelled) return;
+        const payload = await response.json();
+        if (!cancelled) setLinkedSections(mapHistoryDetailToLinkedSections(payload));
+      } catch {
+        if (!cancelled) setLinkedSections([]);
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
   }, [organizationId, linkedWorkDocumentId]);
 
   const statementRowTotal = useMemo(
@@ -481,6 +550,7 @@ export default function SowUploadPage() {
             : 'Upload and linking completed.'
         );
       }
+      setUploadMoreOpen(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to upload SOW and link sections.');
     } finally {
@@ -528,6 +598,172 @@ export default function SowUploadPage() {
     );
   };
 
+  const hasLinkedSections = linkedSections.length > 0;
+
+  const requirementsColumn = (
+    <div className="space-y-4">
+      <RequirementsDocumentViewer
+        title={status?.latest_title}
+        sourceType={status?.latest_source_type}
+        sourceName={status?.latest_source_name}
+        rawText={status?.latest_raw_text}
+      />
+      {status?.latest_requirements_document_id ? (
+        <RequirementsStatementsGroups
+          groups={statementGroups}
+          statementSowCitations={linkedWorkDocumentId ? statementSowCitations : undefined}
+          sowCitationsLoading={Boolean(linkedWorkDocumentId) && sowCitationsLoading}
+        />
+      ) : (
+        <Card>
+          <CardContent className="py-6 text-sm text-gray-600">
+            Requirements statements will appear here as distillation progresses.
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  );
+
+  const openSowSettings = () => {
+    setSowSettingsDraftOverlapPct(Math.round(sowLinkSettings.overlapThreshold * 100));
+    setSowSettingsDraftMaxCitations(sowLinkSettings.maxCitationsPerStatement);
+    setSowSettingsOpen(true);
+  };
+
+  const sowSourceUploadCard = (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
+        <CardTitle className="text-base font-semibold">SOW Source</CardTitle>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 shrink-0 text-gray-600"
+          aria-label="SOW link settings"
+          title="SOW link settings"
+          onClick={openSowSettings}
+        >
+          <Settings className="h-4 w-4" />
+        </Button>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex items-center gap-2">
+          <Button type="button" variant={workInputMode === 'text' ? 'default' : 'outline'} onClick={() => setWorkInputMode('text')}>
+            Text
+          </Button>
+          <Button type="button" variant={workInputMode === 'pdf' ? 'default' : 'outline'} onClick={() => setWorkInputMode('pdf')}>
+            PDF
+          </Button>
+        </div>
+        <div className="space-y-1">
+          <Label htmlFor="workTitle">SOW Title</Label>
+          <Input id="workTitle" value={workTitle} onChange={(e) => setWorkTitle(e.target.value)} />
+        </div>
+        {workInputMode === 'text' ? (
+          <div className="space-y-1">
+            <Label htmlFor="workText">SOW Text</Label>
+            <Textarea
+              id="workText"
+              rows={14}
+              value={workText}
+              onChange={(e) => setWorkText(e.target.value)}
+              placeholder="Paste your SOW content here..."
+            />
+          </div>
+        ) : (
+          <div className="space-y-1">
+            <Label>SOW Files</Label>
+            <div
+              className={`rounded-md border-2 border-dashed p-4 transition ${
+                isDropActive ? 'border-blue-400 bg-blue-50' : 'border-gray-300 bg-gray-50'
+              }`}
+              onDragEnter={(e) => {
+                e.preventDefault();
+                setIsDropActive(true);
+              }}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setIsDropActive(true);
+              }}
+              onDragLeave={(e) => {
+                e.preventDefault();
+                setIsDropActive(false);
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                setIsDropActive(false);
+                addFiles(Array.from(e.dataTransfer.files || []));
+              }}
+            >
+              <p className="text-sm text-gray-700">Drag and drop files/folders here, or use buttons below.</p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button type="button" variant="outline" onClick={() => filesInputRef.current?.click()}>
+                  Add Files
+                </Button>
+                <Button type="button" variant="outline" onClick={() => folderInputRef.current?.click()}>
+                  Add Folder
+                </Button>
+                {workPdfFiles.length > 0 ? (
+                  <Button type="button" variant="ghost" onClick={() => setWorkPdfFiles([])}>
+                    Clear
+                  </Button>
+                ) : null}
+              </div>
+              <input
+                ref={filesInputRef}
+                className="hidden"
+                type="file"
+                accept=".pdf,.txt,.md"
+                multiple
+                onChange={(e) => {
+                  addFiles(Array.from(e.target.files || []));
+                  e.currentTarget.value = '';
+                }}
+              />
+              <input
+                ref={folderInputRef}
+                className="hidden"
+                type="file"
+                multiple
+                onChange={(e) => {
+                  addFiles(Array.from(e.target.files || []));
+                  e.currentTarget.value = '';
+                }}
+              />
+            </div>
+            {workPdfFiles.length > 0 ? (
+              <div className="max-h-40 space-y-1 overflow-auto rounded-md border bg-white p-2">
+                {workPdfFiles.map((file) => (
+                  <div
+                    key={`${file.name}:${file.size}:${file.lastModified}`}
+                    className="flex items-center justify-between text-xs text-gray-700"
+                  >
+                    <span className="truncate pr-2">{file.webkitRelativePath || file.name}</span>
+                    <Button type="button" variant="ghost" className="h-6 px-2" onClick={() => removeWorkFile(file)}>
+                      Remove
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            <p className="text-xs text-gray-500">
+              {workPdfFiles.length > 0
+                ? `${workPdfFiles.length} file(s) queued. You can keep adding more before upload.`
+                : 'Supports PDF/TXT/MD. You can upload individual files or an entire folder.'}
+            </p>
+          </div>
+        )}
+        <Button className="w-full" onClick={handleUploadAndLink} disabled={submitting || !status?.indexed || indexing}>
+          {submitting ? 'Uploading and Linking...' : 'Upload SOW and Generate Links'}
+        </Button>
+        {!indexing && !status?.indexed ? (
+          <p className="text-xs text-amber-700">Requirements indexing has not completed yet.</p>
+        ) : null}
+        {uploadInfo ? <p className="text-xs text-green-700">{uploadInfo}</p> : null}
+      </CardContent>
+    </Card>
+  );
+
   if (loading) {
     return (
       <div className="flex min-h-[300px] items-center justify-center">
@@ -536,241 +772,117 @@ export default function SowUploadPage() {
     );
   }
 
+  const stepProgress = (
+    <RequirementsStepProgress
+      indexed={Boolean(status?.indexed)}
+      currentStep={2}
+      indexing={indexing}
+      indexingLabel={
+        indexing && pendingIndexMode === 'pdf' && (status?.chunk_count ?? 0) === 0
+          ? 'Scanning PDF...'
+          : 'Indexing requirements document...'
+      }
+      chunkCount={status?.chunk_count ?? 0}
+      chunkTotal={status?.chunk_total}
+      statementCount={status?.statement_count ?? 0}
+      statementCandidatesTotal={status?.statement_candidates_total}
+    />
+  );
+
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <Button variant="ghost" onClick={() => router.push(`/app/organizations/${organizationId}/requirements`)} className="mb-2">
-            <ArrowLeft className="mr-2 h-4 w-4" />
-            Back to Requirements Setup
-          </Button>
-          <h1 className="text-3xl font-bold">SOW Upload and Linking</h1>
-          <p className="text-sm text-gray-600">Step 2: Upload SOW and generate saved section links.</p>
-        </div>
-        <Button variant="outline" onClick={() => router.push(`/app/organizations/${organizationId}/history`)}>
-          View History
-        </Button>
-      </div>
+    <>
+      <Dialog open={uploadMoreOpen} onOpenChange={setUploadMoreOpen}>
+        <DialogContent className="max-h-[min(90dvh,880px)] gap-0 overflow-y-auto sm:max-w-lg">
+          <DialogHeader className="pb-4">
+            <DialogTitle>Upload and link more documents</DialogTitle>
+            <DialogDescription>
+              Add another SOW or template. Section links are saved to this workspace when processing completes.
+            </DialogDescription>
+          </DialogHeader>
+          {sowSourceUploadCard}
+        </DialogContent>
+      </Dialog>
 
-      <RequirementsStepProgress
-        indexed={Boolean(status?.indexed)}
-        currentStep={2}
-        indexing={indexing}
-        indexingLabel={
-          indexing && pendingIndexMode === 'pdf' && (status?.chunk_count ?? 0) === 0
-            ? 'Scanning PDF...'
-            : 'Indexing requirements document...'
-        }
-        chunkCount={status?.chunk_count ?? 0}
-        chunkTotal={status?.chunk_total}
-        statementCount={status?.statement_count ?? 0}
-        statementCandidatesTotal={status?.statement_candidates_total}
-      />
-      {error ? <div className="rounded-md bg-red-50 p-3 text-sm text-red-700">{error}</div> : null}
-
-      <div className="grid gap-6 lg:grid-cols-2">
-        <div className="space-y-4">
-          <RequirementsDocumentViewer
-            title={status?.latest_title}
-            sourceType={status?.latest_source_type}
-            sourceName={status?.latest_source_name}
-            rawText={status?.latest_raw_text}
-          />
-          {status?.latest_requirements_document_id ? (
-            <RequirementsStatementsGroups
-              groups={statementGroups}
-              statementSowCitations={linkedWorkDocumentId ? statementSowCitations : undefined}
-              sowCitationsLoading={Boolean(linkedWorkDocumentId) && sowCitationsLoading}
-            />
-          ) : (
-            <Card>
-              <CardContent className="py-6 text-sm text-gray-600">
-                Requirements statements will appear here as distillation progresses.
-              </CardContent>
-            </Card>
-          )}
-        </div>
-
-        <div className="space-y-4">
-          <SowUploadPrimary hasSow={linkedSections.length > 0} />
-          <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
-              <CardTitle className="text-base font-semibold">SOW Source</CardTitle>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8 shrink-0 text-gray-600"
-                aria-label="SOW link settings"
-                title="SOW link settings"
-                onClick={() => {
-                  setSowSettingsDraftOverlapPct(Math.round(sowLinkSettings.overlapThreshold * 100));
-                  setSowSettingsDraftMaxCitations(sowLinkSettings.maxCitationsPerStatement);
-                  setSowSettingsOpen(true);
-                }}
-              >
-                <Settings className="h-4 w-4" />
-              </Button>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex items-center gap-2">
+      {hasLinkedSections ? (
+        <div className="relative left-1/2 w-screen max-w-none -translate-x-1/2 min-h-[calc(100dvh-5.5rem)] bg-gray-50/90 pb-16">
+          <div className="sticky top-0 z-30 border-b border-gray-200 bg-white/95 px-4 py-3 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/85 sm:px-6 lg:px-8">
+            <div className="mx-auto flex max-w-[1600px] flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0">
                 <Button
-                  type="button"
-                  variant={workInputMode === 'text' ? 'default' : 'outline'}
-                  onClick={() => setWorkInputMode('text')}
+                  variant="ghost"
+                  size="sm"
+                  className="-ml-2 mb-1 h-8 px-2 text-gray-600"
+                  onClick={() => router.push(`/app/organizations/${organizationId}/requirements`)}
                 >
-                  Text
+                  <ArrowLeft className="mr-1 h-4 w-4" />
+                  Requirements setup
                 </Button>
-                <Button
-                  type="button"
-                  variant={workInputMode === 'pdf' ? 'default' : 'outline'}
-                  onClick={() => setWorkInputMode('pdf')}
-                >
-                  PDF
+                <h1 className="truncate text-2xl font-bold tracking-tight text-gray-900">Linked documents</h1>
+                <p className="text-sm text-gray-600">Requirements source, extracted statements, and SOW section links.</p>
+              </div>
+              <div className="flex flex-shrink-0 flex-wrap items-center gap-2">
+                <Button type="button" onClick={() => setUploadMoreOpen(true)}>
+                  <Upload className="mr-2 h-4 w-4" />
+                  Upload and link more documents
+                </Button>
+                <Button type="button" variant="outline" size="icon" aria-label="SOW link settings" title="SOW link settings" onClick={openSowSettings}>
+                  <Settings className="h-4 w-4" />
+                </Button>
+                <Button variant="outline" onClick={() => router.push(`/app/organizations/${organizationId}/history`)}>
+                  View History
                 </Button>
               </div>
-              <div className="space-y-1">
-                <Label htmlFor="workTitle">SOW Title</Label>
-                <Input id="workTitle" value={workTitle} onChange={(e) => setWorkTitle(e.target.value)} />
-              </div>
-              {workInputMode === 'text' ? (
-                <div className="space-y-1">
-                  <Label htmlFor="workText">SOW Text</Label>
-                  <Textarea
-                    id="workText"
-                    rows={14}
-                    value={workText}
-                    onChange={(e) => setWorkText(e.target.value)}
-                    placeholder="Paste your SOW content here..."
-                  />
-                </div>
-              ) : (
-                <div className="space-y-1">
-                  <Label>SOW Files</Label>
-                  <div
-                    className={`rounded-md border-2 border-dashed p-4 transition ${
-                      isDropActive ? 'border-blue-400 bg-blue-50' : 'border-gray-300 bg-gray-50'
-                    }`}
-                    onDragEnter={(e) => {
-                      e.preventDefault();
-                      setIsDropActive(true);
-                    }}
-                    onDragOver={(e) => {
-                      e.preventDefault();
-                      setIsDropActive(true);
-                    }}
-                    onDragLeave={(e) => {
-                      e.preventDefault();
-                      setIsDropActive(false);
-                    }}
-                    onDrop={(e) => {
-                      e.preventDefault();
-                      setIsDropActive(false);
-                      addFiles(Array.from(e.dataTransfer.files || []));
-                    }}
-                  >
-                    <p className="text-sm text-gray-700">Drag and drop files/folders here, or use buttons below.</p>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => filesInputRef.current?.click()}
-                      >
-                        Add Files
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => folderInputRef.current?.click()}
-                      >
-                        Add Folder
-                      </Button>
-                      {workPdfFiles.length > 0 ? (
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          onClick={() => setWorkPdfFiles([])}
-                        >
-                          Clear
-                        </Button>
-                      ) : null}
-                    </div>
-                    <input
-                      ref={filesInputRef}
-                      className="hidden"
-                      type="file"
-                      accept=".pdf,.txt,.md"
-                      multiple
-                      onChange={(e) => {
-                        addFiles(Array.from(e.target.files || []));
-                        e.currentTarget.value = '';
-                      }}
-                    />
-                    <input
-                      ref={folderInputRef}
-                      className="hidden"
-                      type="file"
-                      multiple
-                      onChange={(e) => {
-                        addFiles(Array.from(e.target.files || []));
-                        e.currentTarget.value = '';
-                      }}
-                    />
-                  </div>
-                  {workPdfFiles.length > 0 ? (
-                    <div className="max-h-40 space-y-1 overflow-auto rounded-md border bg-white p-2">
-                      {workPdfFiles.map((file) => (
-                        <div
-                          key={`${file.name}:${file.size}:${file.lastModified}`}
-                          className="flex items-center justify-between text-xs text-gray-700"
-                        >
-                          <span className="truncate pr-2">{file.webkitRelativePath || file.name}</span>
-                          <Button type="button" variant="ghost" className="h-6 px-2" onClick={() => removeWorkFile(file)}>
-                            Remove
-                          </Button>
-                        </div>
-                      ))}
-                    </div>
-                  ) : null}
-                  <p className="text-xs text-gray-500">
-                    {workPdfFiles.length > 0
-                      ? `${workPdfFiles.length} file(s) queued. You can keep adding more before upload.`
-                      : 'Supports PDF/TXT/MD. You can upload individual files or an entire folder.'}
-                  </p>
-                </div>
-              )}
-              <Button
-                className="w-full"
-                onClick={handleUploadAndLink}
-                disabled={submitting || !status?.indexed || indexing}
-              >
-                {submitting ? 'Uploading and Linking...' : 'Upload SOW and Generate Links'}
-              </Button>
-              {!indexing && !status?.indexed ? (
-                <p className="text-xs text-amber-700">Requirements indexing has not completed yet.</p>
-              ) : null}
-              {uploadInfo ? <p className="text-xs text-green-700">{uploadInfo}</p> : null}
-            </CardContent>
-          </Card>
-        </div>
-      </div>
+            </div>
+          </div>
 
-      {linkedSections.length > 0 ? (
-        <div className="space-y-4">
-          <h2 className="text-xl font-semibold">Linked Requirement Citations</h2>
-          {linkedSections.map((section) => (
-            <SectionLinkCard
-              key={section.work_section_id}
-              sectionTitle={section.section_title}
-              sectionSourceName={section.work_section_metadata?.source_document_name}
-              links={section.links}
-            />
-          ))}
-          <div className="rounded-md border border-green-200 bg-green-50 p-3 text-sm text-green-700">
-            SOW upload and linking saved. You can review this run in History.
+          <div className="mx-auto max-w-[1600px] space-y-6 px-4 pt-6 sm:px-6 lg:px-8">
+            {indexing || !status?.indexed ? stepProgress : null}
+            {error ? <div className="rounded-md bg-red-50 p-3 text-sm text-red-700">{error}</div> : null}
+            {requirementsColumn}
+            <div className="space-y-4">
+              <h2 className="text-xl font-semibold text-gray-900">SOW sections linked to requirements</h2>
+              {linkedSections.map((section) => (
+                <SectionLinkCard
+                  key={section.work_section_id}
+                  sectionTitle={section.section_title}
+                  sectionSourceName={section.work_section_metadata?.source_document_name}
+                  links={section.links}
+                />
+              ))}
+            </div>
+            <p className="border-t border-gray-200 pt-6 text-sm text-gray-500">
+              Links are saved automatically. Open <span className="font-medium">View History</span> to browse past SOW uploads.
+            </p>
           </div>
         </div>
-      ) : null}
+      ) : (
+        <div className="space-y-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <Button variant="ghost" onClick={() => router.push(`/app/organizations/${organizationId}/requirements`)} className="mb-2">
+                <ArrowLeft className="mr-2 h-4 w-4" />
+                Back to Requirements Setup
+              </Button>
+              <h1 className="text-3xl font-bold">SOW Upload and Linking</h1>
+              <p className="text-sm text-gray-600">Step 2: Upload SOW and generate saved section links.</p>
+            </div>
+            <Button variant="outline" onClick={() => router.push(`/app/organizations/${organizationId}/history`)}>
+              View History
+            </Button>
+          </div>
+
+          {stepProgress}
+          {error ? <div className="rounded-md bg-red-50 p-3 text-sm text-red-700">{error}</div> : null}
+
+          <div className="grid gap-6 lg:grid-cols-2">
+            {requirementsColumn}
+            <div className="space-y-4">
+              <SowUploadPrimary hasSow={false} />
+              {sowSourceUploadCard}
+            </div>
+          </div>
+        </div>
+      )}
 
       <Dialog open={sowSettingsOpen} onOpenChange={setSowSettingsOpen}>
         <DialogContent className="sm:max-w-md">
@@ -843,6 +955,6 @@ export default function SowUploadPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </>
   );
 }
