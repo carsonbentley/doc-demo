@@ -4,6 +4,7 @@ import { User } from '@supabase/supabase-js';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { SignOutButton } from '@/components/auth/sign-out-button';
+import { BrandLogo } from '@/components/app/brand-logo';
 import { cn } from '@/lib/utils';
 import { useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
@@ -41,11 +42,9 @@ export function AppNavigation({ user }: AppNavigationProps) {
     <nav className="bg-white shadow-sm border-b">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between h-16">
-          <div className="flex items-center">
-            <Link href="/app" className="text-xl font-bold text-gray-900">
-              ComplyFlow
-            </Link>
-            <span className="ml-2 text-sm text-gray-500">Requirements Traceability</span>
+          <div className="flex items-center gap-3">
+            <BrandLogo priority />
+            <span className="text-sm text-gray-500 hidden sm:inline">Requirements Traceability</span>
           </div>
           
           <div className="flex items-center space-x-4">

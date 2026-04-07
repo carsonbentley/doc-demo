@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { BrandLogo } from '@/components/app/brand-logo';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -85,7 +86,7 @@ export default function LoginPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Welcome to ComplyFlow</CardTitle>
+            <CardTitle>Welcome</CardTitle>
           </CardHeader>
           <CardContent>
             <Auth
@@ -143,8 +144,10 @@ function HeaderOrgInfo() {
 
   return (
     <div className="text-center">
-      <h1 className="text-3xl font-bold text-gray-900">ComplyFlow</h1>
-      <p className="mt-2 text-gray-600">Defense Requirements Workbench</p>
+      <div className="flex justify-center">
+        <BrandLogo withLink={false} imageClassName="h-12 w-auto max-w-[240px]" width={240} height={56} />
+      </div>
+      <p className="mt-3 text-gray-600">Defense Requirements Workbench</p>
       {teamName && (
         <p className="mt-1 text-sm text-gray-500">Team: {teamName}</p>
       )}

@@ -13,8 +13,12 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "ComplyFlow - Requirements Traceability Workbench",
+  title: "ARC - Requirements Traceability Workbench",
   description: "Upload requirements, link them to SOW sections, and edit with traceable citations.",
+  icons: {
+    icon: "/ARC.png",
+    apple: "/ARC.png",
+  },
 };
 
 export default function RootLayout({

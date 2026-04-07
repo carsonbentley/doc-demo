@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { ArrowLeft } from 'lucide-react';
+import { BrandLogo } from '@/components/app/brand-logo';
 
 export default function PrivacyPolicyPage() {
   return (
@@ -14,6 +15,9 @@ export default function PrivacyPolicyPage() {
               Back to Home
             </Button>
           </Link>
+          <div className="mb-6">
+            <BrandLogo withLink={false} imageClassName="h-10 w-auto max-w-[200px]" width={200} height={48} />
+          </div>
           <h1 className="text-4xl font-bold text-gray-900 mb-2">Privacy Policy</h1>
           <p className="text-gray-600">
             <strong>Last updated:</strong> October 10, 2025
@@ -24,7 +28,7 @@ export default function PrivacyPolicyPage() {
         <div className="bg-white rounded-lg shadow-sm border p-8 space-y-8">
           <div>
             <p className="text-lg text-gray-700 leading-relaxed">
-              ComplyFlow processes requirements documents and draft SOW content that you upload
+              ARC processes requirements documents and draft SOW content that you upload
               directly in the app. We use this content to generate semantic links and citations
               for your team workflow. We do not sell your data.
             </p>
@@ -65,7 +69,7 @@ export default function PrivacyPolicyPage() {
           <div>
             <h2 className="text-2xl font-semibold text-gray-900 mb-4">Third-Party Services</h2>
             <p className="text-gray-700 leading-relaxed">
-              ComplyFlow may use AI providers for embedding and assistant responses. Provider
+              ARC may use AI providers for embedding and assistant responses. Provider
               usage is governed by your configured API credentials and provider terms.
             </p>
           </div>
