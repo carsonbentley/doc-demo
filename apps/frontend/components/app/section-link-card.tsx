@@ -9,20 +9,22 @@ export type SectionLink = {
   chunk_index?: number;
   requirements_document_id?: string;
   similarity: number;
-  metadata?: { section_title?: string };
+  metadata?: { section_title?: string; source_document_name?: string; source_document_path?: string };
 };
 
 type SectionLinkCardProps = {
   sectionTitle: string;
+  sectionSourceName?: string;
   sectionContent?: string;
   links: SectionLink[];
 };
 
-export function SectionLinkCard({ sectionTitle, sectionContent, links }: SectionLinkCardProps) {
+export function SectionLinkCard({ sectionTitle, sectionSourceName, sectionContent, links }: SectionLinkCardProps) {
   return (
     <Card>
       <CardHeader className="pb-2">
         <CardTitle className="text-base">{sectionTitle}</CardTitle>
+        {sectionSourceName ? <p className="text-xs text-gray-600">Source file: {sectionSourceName}</p> : null}
       </CardHeader>
       <CardContent className="space-y-3">
         {sectionContent ? <p className="text-sm text-gray-700">{sectionContent}</p> : null}

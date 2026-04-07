@@ -14,6 +14,11 @@ type HistoryItem = {
   created_at: string;
   section_count: number;
   link_count: number;
+  metadata?: {
+    batch_name?: string;
+    batch_file_count?: number;
+    batch_files?: Array<{ name?: string }>;
+  };
 };
 
 type HistoryDetail = {
@@ -25,6 +30,7 @@ type HistoryDetail = {
     section_title: string;
     section_order: number;
     content: string;
+    metadata?: { source_document_name?: string; source_document_path?: string };
     links: Array<{
       requirements_chunk_id: string;
       chunk_text: string;
@@ -54,7 +60,7 @@ export default function RequirementDocumentHistoryPage() {
         if (!authData.user?.id) throw new Error('You must be logged in to access this page.');
         const docsResult = await supabase
           .from('work_documents')
-          .select('id, title, created_at')
+          .select('id, title, created_at, metadata')
           .eq('organization_id', organizationId)
           .order('created_at', { ascending: false });
         if (docsResult.error) throw docsResult.error;
@@ -87,6 +93,12 @@ export default function RequirementDocumentHistoryPage() {
             created_at: doc.created_at,
             section_count: sectionIds.length,
             link_count: linkCount,
+            metadata:
+              (doc.metadata as {
+                batch_name?: string;
+                batch_file_count?: number;
+                batch_files?: Array<{ name?: string }>;
+              } | null) || undefined,
           });
         }
 
@@ -114,7 +126,7 @@ export default function RequirementDocumentHistoryPage() {
 
       const sectionsResult = await supabase
         .from('work_sections')
-        .select('id, section_title, section_order, content')
+        .select('id, section_title, section_order, content, metadata')
         .eq('organization_id', organizationId)
         .eq('work_document_id', workDocumentId)
         .order('section_order', { ascending: true });
@@ -154,6 +166,9 @@ export default function RequirementDocumentHistoryPage() {
           section_title: section.section_title,
           section_order: section.section_order,
           content: section.content,
+          metadata:
+            (section.metadata as { source_document_name?: string; source_document_path?: string } | null) ||
+            undefined,
           links: mappedLinks.sort((a, b) => b.similarity - a.similarity),
         });
       }

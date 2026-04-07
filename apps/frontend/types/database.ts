@@ -438,6 +438,7 @@ export type Database = {
           content: string
           created_at: string
           id: string
+          metadata: Json
           organization_id: string
           section_key: string
           section_order: number
@@ -449,6 +450,7 @@ export type Database = {
           content: string
           created_at?: string
           id?: string
+          metadata?: Json
           organization_id: string
           section_key: string
           section_order?: number
@@ -460,6 +462,7 @@ export type Database = {
           content?: string
           created_at?: string
           id?: string
+          metadata?: Json
           organization_id?: string
           section_key?: string
           section_order?: number

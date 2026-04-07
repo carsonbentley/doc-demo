@@ -17,7 +17,7 @@ import numpy as np
 import cv2
 import pytesseract
 from PIL import Image
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from openai import OpenAI
 from pydantic import BaseModel, Field
 
@@ -67,6 +67,7 @@ class WorkSectionModel(BaseModel):
     section_title: str
     content: str
     section_order: int
+    metadata: Dict[str, Any] = {}
 
 
 class IngestWorkDocumentResponse(BaseModel):
@@ -88,6 +89,7 @@ class LinkRequirementsRequest(BaseModel):
 class SectionLinkResult(BaseModel):
     work_section_id: str
     section_title: str
+    work_section_metadata: Dict[str, Any] = {}
     links: List[Dict[str, Any]]
 
 
@@ -117,6 +119,7 @@ class WorkHistoryItem(BaseModel):
     created_at: str
     section_count: int
     link_count: int
+    metadata: Dict[str, Any] = {}
 
 
 class WorkHistoryResponse(BaseModel):
@@ -139,6 +142,7 @@ class WorkHistorySectionItem(BaseModel):
     section_title: str
     section_order: int
     content: str
+    metadata: Dict[str, Any] = {}
     links: List[WorkHistoryLinkItem]
 
 
@@ -186,8 +190,52 @@ class RequirementStatementsSummaryResponse(BaseModel):
     by_modal_verb: Dict[str, int]
 
 
+class StatementSowCitation(BaseModel):
+    work_section_id: str
+    section_title: str
+    work_document_title: str | None = None
+    source_document_name: str | None = None
+    quote: str
+    similarity: float
+
+
+class StatementSowLinksEntry(BaseModel):
+    requirement_statement_id: str
+    citations: List[StatementSowCitation]
+
+
+class StatementSowLinksResponse(BaseModel):
+    organization_id: str
+    requirements_document_id: str
+    work_document_id: str
+    statements: List[StatementSowLinksEntry]
+
+
 def _normalize_whitespace(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _token_set_alnum(text: str) -> Set[str]:
+    return set(re.findall(r"[a-z0-9]+", text.lower()))
+
+
+def _statement_chunk_overlap_score(statement_text: str, chunk_text: str) -> float:
+    """How well a distilled statement aligns with a requirements chunk (token coverage + substring)."""
+    s_norm = _normalize_whitespace(statement_text)
+    c_norm = _normalize_whitespace(chunk_text)
+    if not s_norm or not c_norm:
+        return 0.0
+    sl = s_norm.lower()
+    cl = c_norm.lower()
+    if len(sl) >= 24 and sl in cl:
+        return 0.92
+    if len(cl) >= 24 and cl in sl:
+        return 0.88
+    st = _token_set_alnum(s_norm)
+    ct = _token_set_alnum(c_norm)
+    if not st:
+        return 0.0
+    return len(st & ct) / len(st)
 
 
 def _insert_heading_line_breaks(text: str) -> str:
@@ -1267,12 +1315,15 @@ def _persist_work_from_text(
     page_count: int | None = None,
     ocr_pages: int | None = None,
     extraction_warnings: List[str] | None = None,
+    source_document_name: str | None = None,
+    source_document_path: str | None = None,
+    work_document_metadata: Dict[str, Any] | None = None,
 ) -> IngestWorkDocumentResponse:
     if not request.raw_text.strip():
         raise HTTPException(status_code=400, detail="raw_text cannot be empty")
 
     try:
-        document_metadata = {}
+        document_metadata = dict(work_document_metadata or {})
         if page_count is not None:
             document_metadata["page_count"] = page_count
         if ocr_pages is not None:
@@ -1310,6 +1361,10 @@ def _persist_work_from_text(
             "section_title": section["section_title"],
             "content": section["content"],
             "section_order": idx + 1,
+            "metadata": {
+                "source_document_name": source_document_name or request.title,
+                "source_document_path": source_document_path,
+            },
         }
         for idx, section in enumerate(sections)
     ]
@@ -1335,12 +1390,60 @@ def _persist_work_from_text(
                 section_title=section["section_title"],
                 content=section["content"],
                 section_order=section["section_order"],
+                metadata=section.get("metadata") or {},
             )
             for section in inserted_sections
         ],
         page_count=page_count,
         ocr_pages=ocr_pages,
         extraction_warnings=extraction_warnings or [],
+    )
+
+
+async def _extract_work_upload_payload(file: UploadFile) -> Dict[str, Any]:
+    filename = file.filename or "uploaded_file"
+    suffix = filename.lower()
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail=f"Uploaded file is empty: {filename}")
+
+    if suffix.endswith(".pdf"):
+        extracted = _extract_pdf_text_with_hybrid_ocr(file_bytes)
+        _debug_log_pdf_extraction("work/ingest-batch", filename, extracted)
+        if not extracted["text"]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Could not extract usable text from PDF: {filename}",
+            )
+        return {
+            "filename": filename,
+            "text": extracted["text"],
+            "source_type": "pdf",
+            "page_count": extracted.get("page_count"),
+            "ocr_pages": extracted.get("ocr_pages"),
+            "warnings": extracted.get("warnings") or [],
+        }
+
+    if suffix.endswith(".txt") or suffix.endswith(".md"):
+        try:
+            decoded = file_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            decoded = file_bytes.decode("latin-1")
+        text = _normalize_whitespace(decoded)
+        if not text:
+            raise HTTPException(status_code=400, detail=f"No usable text found in file: {filename}")
+        return {
+            "filename": filename,
+            "text": decoded,
+            "source_type": "text",
+            "page_count": None,
+            "ocr_pages": None,
+            "warnings": [],
+        }
+
+    raise HTTPException(
+        status_code=400,
+        detail=f"Unsupported file type for batch upload: {filename}. Only PDF/TXT/MD are supported.",
     )
 
 
@@ -1436,6 +1539,120 @@ async def ingest_work_pdf(
         page_count=extracted["page_count"],
         ocr_pages=extracted["ocr_pages"],
         extraction_warnings=extracted["warnings"],
+        source_document_name=file.filename,
+    )
+
+
+@router.post("/work/ingest-batch", response_model=IngestWorkDocumentResponse)
+async def ingest_work_batch(
+    organization_id: str = Form(...),
+    uploaded_by: str = Form(...),
+    title: str = Form(...),
+    batch_name: str | None = Form(None),
+    files: List[UploadFile] = File(...),
+    supabase=Depends(get_supabase_client),
+):
+    if not files:
+        raise HTTPException(status_code=400, detail="At least one file is required.")
+
+    extracted_files: List[Dict[str, Any]] = []
+    total_pages = 0
+    total_ocr_pages = 0
+    warnings: List[str] = []
+    for upload in files:
+        payload = await _extract_work_upload_payload(upload)
+        extracted_files.append(payload)
+        total_pages += payload.get("page_count") or 0
+        total_ocr_pages += payload.get("ocr_pages") or 0
+        warnings.extend(payload.get("warnings") or [])
+
+    combined_raw_text = "\n\n".join(
+        f"[SOURCE DOCUMENT: {item['filename']}]\n{item['text']}" for item in extracted_files
+    ).strip()
+    if not combined_raw_text:
+        raise HTTPException(status_code=400, detail="No usable text extracted from selected files.")
+
+    metadata = {
+        "batch_name": batch_name or title,
+        "batch_file_count": len(extracted_files),
+        "batch_files": [
+            {
+                "name": item["filename"],
+                "source_type": item.get("source_type", "text"),
+                "page_count": item.get("page_count"),
+                "ocr_pages": item.get("ocr_pages"),
+            }
+            for item in extracted_files
+        ],
+    }
+
+    request = IngestWorkDocumentRequest(
+        organization_id=organization_id,
+        uploaded_by=uploaded_by,
+        title=title,
+        raw_text=combined_raw_text,
+    )
+    result = _persist_work_from_text(
+        request,
+        supabase,
+        page_count=total_pages or None,
+        ocr_pages=total_ocr_pages or None,
+        extraction_warnings=warnings,
+        source_document_name=batch_name or "Batch upload",
+        work_document_metadata=metadata,
+    )
+
+    section_rows = []
+    order_counter = 1
+    for item in extracted_files:
+        sections = _split_sections(item["text"])
+        for idx, section in enumerate(sections):
+            section_rows.append(
+                {
+                    "organization_id": organization_id,
+                    "work_document_id": result.work_document_id,
+                    "section_key": f"source-{order_counter}",
+                    "section_title": section["section_title"],
+                    "content": section["content"],
+                    "section_order": order_counter,
+                    "metadata": {
+                        "source_document_name": item["filename"],
+                        "source_document_path": item["filename"],
+                        "source_document_index": idx + 1,
+                    },
+                }
+            )
+            order_counter += 1
+
+    try:
+        supabase.table("work_sections").delete().eq("work_document_id", result.work_document_id).execute()
+        if section_rows:
+            inserted = supabase.table("work_sections").insert(section_rows).execute()
+            inserted_sections = inserted.data or []
+        else:
+            inserted_sections = []
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="Failed writing batch work sections to Supabase.",
+        ) from exc
+
+    return IngestWorkDocumentResponse(
+        work_document_id=result.work_document_id,
+        sections=[
+            WorkSectionModel(
+                id=section["id"],
+                section_key=section["section_key"],
+                section_title=section["section_title"],
+                content=section["content"],
+                section_order=section["section_order"],
+                metadata=section.get("metadata") or {},
+            )
+            for section in inserted_sections
+        ],
+        page_count=result.page_count,
+        ocr_pages=result.ocr_pages,
+        extraction_warnings=result.extraction_warnings,
     )
 
 
@@ -1447,7 +1664,7 @@ async def link_work_sections(
     try:
         sections_result = (
             supabase.table("work_sections")
-            .select("id, section_title, content")
+            .select("id, section_title, content, metadata")
             .eq("organization_id", request.organization_id)
             .eq("work_document_id", request.work_document_id)
             .execute()
@@ -1584,6 +1801,7 @@ async def link_work_sections(
             SectionLinkResult(
                 work_section_id=section["id"],
                 section_title=section["section_title"],
+                work_section_metadata=section.get("metadata") or {},
                 links=top_matches,
             )
         )
@@ -1788,6 +2006,153 @@ async def requirements_statements_summary(
     )
 
 
+@router.get(
+    "/requirements/{requirements_document_id}/statement-sow-links",
+    response_model=StatementSowLinksResponse,
+)
+async def requirements_statement_sow_links(
+    requirements_document_id: str,
+    organization_id: str,
+    work_document_id: str,
+    overlap_threshold: float = Query(default=0.38, ge=0.0, le=1.0),
+    max_citations_per_statement: int = Query(default=10, ge=1, le=50),
+    supabase=Depends(get_supabase_client),
+):
+    """Resolve saved section→chunk links into requirement-statement→SOW citations."""
+    try:
+        work_doc_result = (
+            supabase.table("work_documents")
+            .select("id, title, metadata")
+            .eq("organization_id", organization_id)
+            .eq("id", work_document_id)
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Failed to load work document.") from exc
+
+    work_doc = (work_doc_result.data or [None])[0]
+    if not work_doc:
+        raise HTTPException(status_code=404, detail="Work document not found.")
+
+    work_document_title = work_doc.get("title")
+
+    try:
+        sections_result = (
+            supabase.table("work_sections")
+            .select("id, section_title, content, metadata")
+            .eq("organization_id", organization_id)
+            .eq("work_document_id", work_document_id)
+            .order("section_order", desc=False)
+            .execute()
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Failed to load work sections.") from exc
+
+    sections = sections_result.data or []
+    section_by_id = {row["id"]: row for row in sections}
+    section_ids = list(section_by_id.keys())
+
+    links_rows: List[Dict[str, Any]] = []
+    if section_ids:
+        try:
+            links_result = (
+                supabase.table("section_requirement_links")
+                .select("work_section_id, requirements_chunk_id, similarity")
+                .eq("organization_id", organization_id)
+                .in_("work_section_id", section_ids)
+                .execute()
+            )
+            links_rows = links_result.data or []
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="Failed to load section requirement links.") from exc
+
+    chunk_ids_in_links = {row["requirements_chunk_id"] for row in links_rows}
+
+    try:
+        chunks_result = (
+            supabase.table("requirements_chunks")
+            .select("id, chunk_text, chunk_index, metadata")
+            .eq("organization_id", organization_id)
+            .eq("requirements_document_id", requirements_document_id)
+            .execute()
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Failed to load requirements chunks.") from exc
+
+    chunks = chunks_result.data or []
+
+    try:
+        statements_result = (
+            supabase.table("requirements_statements")
+            .select("id, statement_text, metadata")
+            .eq("organization_id", organization_id)
+            .eq("requirements_document_id", requirements_document_id)
+            .order("statement_order", desc=False)
+            .execute()
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="Failed to load requirements statements.") from exc
+
+    statement_rows = statements_result.data or []
+
+    links_by_chunk: Dict[str, List[Dict[str, Any]]] = {}
+    for link in links_rows:
+        cid = link["requirements_chunk_id"]
+        links_by_chunk.setdefault(cid, []).append(link)
+
+    entries: List[StatementSowLinksEntry] = []
+    for stmt in statement_rows:
+        sid = stmt["id"]
+        meta = stmt.get("metadata") or {}
+        stmt_text = str(meta.get("distilled_text") or stmt.get("statement_text") or "")
+
+        matched_chunk_ids: List[str] = []
+        for chunk in chunks:
+            if chunk["id"] not in chunk_ids_in_links:
+                continue
+            score = _statement_chunk_overlap_score(stmt_text, chunk.get("chunk_text") or "")
+            if score >= overlap_threshold:
+                matched_chunk_ids.append(chunk["id"])
+
+        citation_map: Dict[str, StatementSowCitation] = {}
+        for cid in matched_chunk_ids:
+            for link in links_by_chunk.get(cid, []):
+                ws_id = link["work_section_id"]
+                section = section_by_id.get(ws_id)
+                if not section:
+                    continue
+                ws_meta = section.get("metadata") or {}
+                source_name = ws_meta.get("source_document_name")
+                sim = float(link.get("similarity") or 0.0)
+                quote = _excerpt_text(section.get("content") or "", max_chars=560)
+                citation = StatementSowCitation(
+                    work_section_id=ws_id,
+                    section_title=section.get("section_title") or "Section",
+                    work_document_title=work_document_title,
+                    source_document_name=source_name,
+                    quote=quote,
+                    similarity=sim,
+                )
+                existing = citation_map.get(ws_id)
+                if not existing or existing.similarity < citation.similarity:
+                    citation_map[ws_id] = citation
+
+        citations = sorted(citation_map.values(), key=lambda c: c.similarity, reverse=True)[
+            :max_citations_per_statement
+        ]
+        entries.append(
+            StatementSowLinksEntry(requirement_statement_id=sid, citations=citations)
+        )
+
+    return StatementSowLinksResponse(
+        organization_id=organization_id,
+        requirements_document_id=requirements_document_id,
+        work_document_id=work_document_id,
+        statements=entries,
+    )
+
+
 @router.get("/work/history", response_model=WorkHistoryResponse)
 async def work_history(
     organization_id: str,
@@ -1796,7 +2161,7 @@ async def work_history(
     try:
         work_docs_result = (
             supabase.table("work_documents")
-            .select("id, title, created_at")
+            .select("id, title, created_at, metadata")
             .eq("organization_id", organization_id)
             .order("created_at", desc=True)
             .execute()
@@ -1846,6 +2211,7 @@ async def work_history(
                 created_at=doc["created_at"],
                 section_count=len(section_ids),
                 link_count=link_count,
+                metadata=doc.get("metadata") or {},
             )
         )
     return WorkHistoryResponse(organization_id=organization_id, items=items)
@@ -1876,7 +2242,7 @@ async def work_history_detail(
     try:
         sections_result = (
             supabase.table("work_sections")
-            .select("id, section_title, section_order, content")
+            .select("id, section_title, section_order, content, metadata")
             .eq("organization_id", organization_id)
             .eq("work_document_id", work_document_id)
             .order("section_order", desc=False)
@@ -1947,6 +2313,7 @@ async def work_history_detail(
                 section_title=section["section_title"],
                 section_order=section["section_order"],
                 content=section["content"],
+                metadata=section.get("metadata") or {},
                 links=section_links,
             )
         )

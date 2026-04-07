@@ -1,9 +1,11 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { Link as LinkIcon } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { LoadingSpinner } from '@/components/ui/loading-spinner';
 
 type RequirementStatement = {
   id: string;
@@ -27,8 +29,20 @@ type RequirementStatementGroup = {
   items: RequirementStatement[];
 };
 
+export type StatementSowCitation = {
+  work_section_id: string;
+  section_title: string;
+  work_document_title?: string | null;
+  source_document_name?: string | null;
+  quote: string;
+  similarity: number;
+};
+
 type RequirementsStatementsGroupsProps = {
   groups: RequirementStatementGroup[];
+  /** When set (e.g. after SOW linking), expanded rows show matching SOW excerpts. */
+  statementSowCitations?: Record<string, StatementSowCitation[]>;
+  sowCitationsLoading?: boolean;
 };
 
 const VERB_BADGE_STYLES: Record<string, string> = {
@@ -39,7 +53,11 @@ const VERB_BADGE_STYLES: Record<string, string> = {
   can: 'bg-emerald-100 text-emerald-700',
 };
 
-export function RequirementsStatementsGroups({ groups }: RequirementsStatementsGroupsProps) {
+export function RequirementsStatementsGroups({
+  groups,
+  statementSowCitations,
+  sowCitationsLoading,
+}: RequirementsStatementsGroupsProps) {
   const cleanSectionTitle = (title: string) =>
     title.replace(/^section\s+\d+(?:\.\d+)*\s*[:\-]?\s*/i, '').trim() || title;
 
@@ -160,6 +178,59 @@ export function RequirementsStatementsGroups({ groups }: RequirementsStatementsG
                     </p>
                     <p className="mb-2 mt-3 text-xs uppercase tracking-wide text-gray-500">Source Quote</p>
                     <p className="text-sm text-gray-700">{statement.source_quote || statement.statement_text}</p>
+                    {statementSowCitations !== undefined ? (
+                      <div className="mt-4 border-t border-emerald-100 pt-4">
+                        <p className="mb-2 text-xs uppercase tracking-wide text-emerald-800">
+                          Linked SOW citations
+                        </p>
+                        {sowCitationsLoading ? (
+                          <div className="flex items-center gap-2 text-sm text-gray-600">
+                            <LoadingSpinner size="sm" />
+                            Loading SOW matches…
+                          </div>
+                        ) : (
+                          (() => {
+                            const cites = statementSowCitations[statement.id] ?? [];
+                            if (cites.length === 0) {
+                              return (
+                                <p className="text-sm text-gray-500">
+                                  No linked SOW excerpts matched this requirement yet. Run linking after upload, or try a
+                                  different SOW.
+                                </p>
+                              );
+                            }
+                            return (
+                              <ul className="space-y-3">
+                                {cites.map((c) => (
+                                  <li
+                                    key={`${c.work_section_id}-${c.section_title}`}
+                                    className="rounded-md border border-emerald-200/80 bg-emerald-50/60 p-3"
+                                  >
+                                    <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
+                                      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 font-medium text-emerald-900">
+                                        <LinkIcon className="h-3 w-3" />
+                                        {(c.similarity * 100).toFixed(0)}% match
+                                      </span>
+                                      {c.source_document_name ? (
+                                        <span className="rounded-full bg-white/80 px-2 py-0.5 text-gray-800">
+                                          {c.source_document_name}
+                                        </span>
+                                      ) : c.work_document_title ? (
+                                        <span className="rounded-full bg-white/80 px-2 py-0.5 text-gray-800">
+                                          {c.work_document_title}
+                                        </span>
+                                      ) : null}
+                                    </div>
+                                    <p className="mb-1 text-xs font-medium text-gray-700">{c.section_title}</p>
+                                    <p className="text-sm leading-relaxed text-gray-800">{c.quote}</p>
+                                  </li>
+                                ))}
+                              </ul>
+                            );
+                          })()
+                        )}
+                      </div>
+                    ) : null}
                     {statement.note_text ? (
                       <div className="mt-2 rounded-md border border-blue-200 bg-blue-50 p-2 text-xs text-blue-800">
                         <span className="font-semibold">NOTE:</span> {statement.note_text}

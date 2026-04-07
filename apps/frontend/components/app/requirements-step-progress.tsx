@@ -7,6 +7,7 @@ type RequirementsStepProgressProps = {
   indexed: boolean;
   currentStep: 1 | 2;
   indexing?: boolean;
+  indexingLabel?: string;
   chunkCount?: number;
   chunkTotal?: number;
   statementCount?: number;
@@ -35,6 +36,7 @@ export function RequirementsStepProgress({
   indexed,
   currentStep,
   indexing = false,
+  indexingLabel,
   chunkCount = 0,
   chunkTotal,
   statementCount = 0,
@@ -110,6 +112,7 @@ export function RequirementsStepProgress({
       </div>
       {showBar ? (
         <div className="mt-3 space-y-2">
+          <p className="text-xs text-blue-700">{indexingLabel || 'Indexing requirements document...'}</p>
           <div
             className="relative h-2.5 w-full overflow-hidden rounded-full bg-slate-200"
             role="progressbar"

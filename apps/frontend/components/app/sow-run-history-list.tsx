@@ -12,6 +12,11 @@ type HistoryItem = {
   created_at: string;
   section_count: number;
   link_count: number;
+  metadata?: {
+    batch_name?: string;
+    batch_file_count?: number;
+    batch_files?: Array<{ name?: string }>;
+  };
 };
 
 type HistoryDetailSection = {
@@ -19,6 +24,7 @@ type HistoryDetailSection = {
   section_title: string;
   section_order: number;
   content: string;
+  metadata?: { source_document_name?: string; source_document_path?: string };
   links: SectionLink[];
 };
 
@@ -63,7 +69,7 @@ export function SowRunHistoryList({
           <Card key={item.work_document_id}>
             <CardHeader>
               <div className="flex items-center justify-between gap-4">
-                <CardTitle className="text-base">{item.title}</CardTitle>
+                <CardTitle className="text-base">{item.metadata?.batch_name || item.title}</CardTitle>
                 <Button
                   variant="outline"
                   onClick={() => {
@@ -84,6 +90,12 @@ export function SowRunHistoryList({
                 {new Date(item.created_at).toLocaleString()} | Sections: {item.section_count} | Links:{' '}
                 {item.link_count}
               </p>
+              {item.metadata?.batch_file_count ? (
+                <p className="text-xs text-gray-500">
+                  Batch files: {item.metadata.batch_file_count}
+                  {item.metadata.batch_files?.length ? ` (${item.metadata.batch_files.map((f) => f.name).filter(Boolean).join(', ')})` : ''}
+                </p>
+              ) : null}
             </CardHeader>
             {isExpanded ? (
               <CardContent className="space-y-4">
@@ -94,6 +106,7 @@ export function SowRunHistoryList({
                     <SectionLinkCard
                       key={section.work_section_id}
                       sectionTitle={section.section_title}
+                      sectionSourceName={section.metadata?.source_document_name}
                       sectionContent={section.content}
                       links={section.links}
                     />

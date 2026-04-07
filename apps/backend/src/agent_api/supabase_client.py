@@ -89,6 +89,22 @@ class QueryBuilder:
         self.filters.append(f"limit={count}")
         return self
 
+    def in_(self, column: str, values: List[Any]):
+        """Filter rows where column is one of the given values (PostgREST `in`)."""
+        if not values:
+            self.filters.append(f"{column}=in.()")
+            return self
+        parts: List[str] = []
+        for value in values:
+            text = str(value)
+            if any(ch in text for ch in ",)"):
+                escaped = text.replace('"', '\\"')
+                parts.append(f'"{escaped}"')
+            else:
+                parts.append(text)
+        self.filters.append(f"{column}=in.({','.join(parts)})")
+        return self
+
     def execute(self):
         """Execute the query."""
         url = self.url
