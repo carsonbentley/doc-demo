@@ -82,8 +82,8 @@ class LinkRequirementsRequest(BaseModel):
     organization_id: str
     work_document_id: str
     requirements_document_id: str | None = None
-    max_links_per_section: int = Field(default=5, ge=1, le=20)
-    min_similarity: float = Field(default=0.65, ge=0.0, le=1.0)
+    max_links_per_section: int = Field(default=3, ge=1, le=20)
+    min_similarity: float = Field(default=0.7, ge=0.0, le=1.0)
 
 
 class SectionLinkResult(BaseModel):
@@ -2019,8 +2019,8 @@ async def requirements_statement_sow_links(
     requirements_document_id: str,
     organization_id: str,
     work_document_id: str,
-    overlap_threshold: float = Query(default=0.38, ge=0.0, le=1.0),
-    max_citations_per_statement: int = Query(default=10, ge=1, le=50),
+    overlap_threshold: float = Query(default=0.7, ge=0.0, le=1.0),
+    max_citations_per_statement: int = Query(default=3, ge=1, le=50),
     supabase=Depends(get_supabase_client),
 ):
     """Resolve saved section→chunk links into requirement-statement→SOW citations."""

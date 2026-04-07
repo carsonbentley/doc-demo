@@ -151,8 +151,8 @@ export default function SowUploadPage() {
   const [sowLinkSettings, setSowLinkSettings] = useState<SowLinkSettings>(DEFAULT_SOW_LINK_SETTINGS);
   const [sowSettingsOpen, setSowSettingsOpen] = useState(false);
   const [uploadMoreOpen, setUploadMoreOpen] = useState(false);
-  const [sowSettingsDraftOverlapPct, setSowSettingsDraftOverlapPct] = useState(38);
-  const [sowSettingsDraftMaxCitations, setSowSettingsDraftMaxCitations] = useState(10);
+  const [sowSettingsDraftOverlapPct, setSowSettingsDraftOverlapPct] = useState(70);
+  const [sowSettingsDraftMaxCitations, setSowSettingsDraftMaxCitations] = useState(3);
   const filesInputRef = useRef<HTMLInputElement | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -524,8 +524,8 @@ export default function SowUploadPage() {
         organization_id: organizationId,
         work_document_id: workDocumentId,
         requirements_document_id: status.latest_requirements_document_id,
-        max_links_per_section: 5,
-        min_similarity: 0.6,
+        max_links_per_section: sowLinkSettings.maxCitationsPerStatement,
+        min_similarity: sowLinkSettings.overlapThreshold,
       }),
     });
     if (!response.ok) throw new Error(`Failed to link sections (${response.status})`);
@@ -942,7 +942,7 @@ export default function SowUploadPage() {
                 const overlapThreshold = Math.min(0.95, Math.max(0.05, overlapRaw));
                 const maxCitationsPerStatement = Math.min(
                   50,
-                  Math.max(1, Math.round(Number.isFinite(sowSettingsDraftMaxCitations) ? sowSettingsDraftMaxCitations : 10))
+                  Math.max(1, Math.round(Number.isFinite(sowSettingsDraftMaxCitations) ? sowSettingsDraftMaxCitations : 3))
                 );
                 const next: SowLinkSettings = { overlapThreshold, maxCitationsPerStatement };
                 setSowLinkSettings(next);

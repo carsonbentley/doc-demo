@@ -8,8 +8,8 @@ export type SowLinkSettings = {
 const STORAGE_PREFIX = 'gc.sowLinkSettings.';
 
 export const DEFAULT_SOW_LINK_SETTINGS: SowLinkSettings = {
-  overlapThreshold: 0.38,
-  maxCitationsPerStatement: 10,
+  overlapThreshold: 0.7,
+  maxCitationsPerStatement: 3,
 };
 
 function clamp(n: number, min: number, max: number): number {
