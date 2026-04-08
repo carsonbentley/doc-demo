@@ -106,7 +106,7 @@ export function RequirementsStepProgress({
             <Circle className="h-4 w-4 text-gray-400" />
           )}
           <span className={stepTwoActive ? 'font-medium text-blue-700' : 'text-gray-600'}>
-            2. SOW Upload and Linking
+            2. Traceability Completed
           </span>
         </div>
       </div>

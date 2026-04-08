@@ -255,7 +255,7 @@ export default function RequirementsSetupPage() {
               ) : null}
             </p>
             <Button type="button" onClick={() => router.push(`/app/organizations/${organizationId}/sow`)}>
-              Continue to SOW upload
+              Continue
             </Button>
           </CardContent>
         </Card>

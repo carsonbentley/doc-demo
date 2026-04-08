@@ -200,12 +200,9 @@ export default function RequirementDocumentHistoryPage() {
       <div>
         <Button variant="ghost" onClick={() => router.push(`/app/organizations/${organizationId}/sow`)} className="mb-2">
           <ArrowLeft className="mr-2 h-4 w-4" />
-          Back to SOW Upload
+          Back to Document Upload
         </Button>
-        <h1 className="text-3xl font-bold">SOW History</h1>
-        <p className="text-sm text-gray-600">
-          Each item is a saved SOW upload run with expandable linked requirement sections.
-        </p>
+        <h1 className="text-3xl font-bold">Document History</h1>
       </div>
 
       {error ? <div className="rounded-md bg-red-50 p-3 text-sm text-red-700">{error}</div> : null}

@@ -44,7 +44,7 @@ export function AppNavigation({ user }: AppNavigationProps) {
         <div className="flex justify-between h-16">
           <div className="flex items-center gap-3">
             <BrandLogo priority />
-            <span className="text-sm text-gray-500 hidden sm:inline">Requirements Traceability</span>
+            <span className="text-sm text-gray-500 hidden sm:inline">Aerospace Regulatory Compliance</span>
           </div>
           
           <div className="flex items-center space-x-4">

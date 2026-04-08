@@ -181,12 +181,12 @@ export function RequirementsStatementsGroups({
                     {statementSowCitations !== undefined ? (
                       <div className="mt-4 border-t border-emerald-100 pt-4">
                         <p className="mb-2 text-xs uppercase tracking-wide text-emerald-800">
-                          Linked SOW citations
+                          Linked document citations
                         </p>
                         {sowCitationsLoading ? (
                           <div className="flex items-center gap-2 text-sm text-gray-600">
                             <LoadingSpinner size="sm" />
-                            Loading SOW matches…
+                            Loading document matches…
                           </div>
                         ) : (
                           (() => {
@@ -194,8 +194,8 @@ export function RequirementsStatementsGroups({
                             if (cites.length === 0) {
                               return (
                                 <p className="text-sm text-gray-500">
-                                  No linked SOW excerpts matched this requirement yet. Run linking after upload, or try a
-                                  different SOW.
+                                  None of your documents matched this requirement yet. Run linking after upload, or try a
+                                  different document.
                                 </p>
                               );
                             }

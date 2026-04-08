@@ -54,7 +54,7 @@ export function SowRunHistoryList({
     return (
       <Card>
         <CardContent className="py-8 text-center text-sm text-gray-600">
-          No SOW uploads yet. Upload one to start building history.
+          No document uploads yet. Upload one to start building history.
         </CardContent>
       </Card>
     );

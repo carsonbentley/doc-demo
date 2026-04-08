@@ -14,10 +14,10 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "ARC - Requirements Traceability Workbench",
-  description: "Upload requirements, link them to SOW sections, and edit with traceable citations.",
+  description: "Upload requirements, link them to your procedures, and edit with traceable citations.",
   icons: {
-    icon: "/ARC.png",
-    apple: "/ARC.png",
+    icon: "/arc1.png",
+    apple: "/arc1.png",
   },
 };
 
