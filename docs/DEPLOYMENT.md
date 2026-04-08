@@ -43,12 +43,14 @@ This guide walks you through deploying GrantComply using the optimal **Railway +
    - Add these variables:
 
    ```bash
-   SUPABASE_URL=https://aynrqsbkhnirucgovwnf.supabase.co
-   SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF5bnJxc2JraG5pcnVjZ292d25mIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1NjU3OTY1NSwiZXhwIjoyMDcyMTU1NjU1fQ.M7Vqa56uHObeV4C22VhFQFFou_ZNu8YqR0fkJ_j3GR8
-   OPENAI_API_KEY=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
+   SUPABASE_URL=https://<your-project-ref>.supabase.co
+   SUPABASE_SERVICE_ROLE_KEY=<your_supabase_service_role_key>
+   OPENAI_API_KEY=<your_openai_api_key>
    OPENAI_MODEL=gpt-4o-mini
-   GOOGLE_CLIENT_SECRET=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
+   GOOGLE_CLIENT_SECRET=<your_google_oauth_client_secret>
    ```
+
+   Use values from the Supabase project settings, OpenAI dashboard, and Google Cloud OAuth client. Never commit real keys to the repository.
 
 5. **Get Backend URL**:
    - Copy the Railway deployment URL (e.g., `https://backend-production-xxxx.up.railway.app`)
@@ -82,17 +84,21 @@ This guide walks you through deploying GrantComply using the optimal **Railway +
    - Add these variables:
 
    ```bash
-   NEXT_PUBLIC_SUPABASE_URL=https://aynrqsbkhnirucgovwnf.supabase.co
-   NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF5bnJxc2JraG5pcnVjZ292d25mIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTY1Nzk2NTUsImV4cCI6MjA3MjE1NTY1NX0.HqgRQfW-QduwnBob7ZpsI_e30iXAEuq2wzhy0_idWZk
-   NEXT_PUBLIC_GOOGLE_API_KEY=AIzaSyAUCnP0ce9WqhfiYtbJ5vCjaB6vMpvIV7E
-   NEXT_PUBLIC_GOOGLE_CLIENT_ID=134720547219-bqof9sbkq53kr3rsrhhl4ddnl2vdglg8.apps.googleusercontent.com
-   NEXT_PUBLIC_GOOGLE_CLOUD_PROJECT_NUMBER=134720547219
-   SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF5bnJxc2JraG5pcnVjZ292d25mIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1NjU3OTY1NSwiZXhwIjoyMDcyMTU1NjU1fQ.M7Vqa56uHObeV4C22VhFQFFou_ZNu8YqR0fkJ_j3GR8
-   
+   NEXT_PUBLIC_SUPABASE_URL=https://<your-project-ref>.supabase.co
+   NEXT_PUBLIC_SUPABASE_ANON_KEY=<your_supabase_anon_or_publishable_key>
+   NEXT_PUBLIC_GOOGLE_API_KEY=<your_google_api_key>
+   NEXT_PUBLIC_GOOGLE_CLIENT_ID=<your_google_oauth_client_id>.apps.googleusercontent.com
+   NEXT_PUBLIC_GOOGLE_CLOUD_PROJECT_NUMBER=<your_gcp_project_number>
+
+   # Do not set SUPABASE_SERVICE_ROLE_KEY on the frontend project unless a specific
+   # server-only integration requires it; prefer the anon key + RLS for browser code.
+
    # UPDATE THESE WITH YOUR RAILWAY BACKEND URL:
    NEXT_PUBLIC_AI_API_URL=https://your-backend-url.up.railway.app
    NEXT_PUBLIC_AGENT_API_URL=https://your-backend-url.up.railway.app
    ```
+
+   Restrict Google API keys in Google Cloud Console (HTTP referrers / bundle IDs) where applicable.
 
 ### Step 3: Update Google Apps Script
 

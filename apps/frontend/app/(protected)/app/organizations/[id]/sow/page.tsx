@@ -14,7 +14,7 @@ import { RequirementsStepProgress } from '@/components/app/requirements-step-pro
 import { RequirementsDocumentViewer } from '@/components/app/requirements-document-viewer';
 import { RequirementsStatementsGroups } from '@/components/app/requirements-statements-groups';
 import { SowUploadPrimary } from '@/components/app/sow-upload-primary';
-import { SectionLinkCard, SectionLink } from '@/components/app/section-link-card';
+import { type SectionLink } from '@/components/app/section-link-card';
 import {
   clearPendingRequirementsPayload,
   getPendingRequirementsPayload,
@@ -839,17 +839,6 @@ export default function SowUploadPage() {
             {indexing || !status?.indexed ? stepProgress : null}
             {error ? <div className="rounded-md bg-red-50 p-3 text-sm text-red-700">{error}</div> : null}
             {requirementsColumn}
-            <div className="space-y-4">
-              <h2 className="text-xl font-semibold text-gray-900">SOW sections linked to requirements</h2>
-              {linkedSections.map((section) => (
-                <SectionLinkCard
-                  key={section.work_section_id}
-                  sectionTitle={section.section_title}
-                  sectionSourceName={section.work_section_metadata?.source_document_name}
-                  links={section.links}
-                />
-              ))}
-            </div>
             <p className="border-t border-gray-200 pt-6 text-sm text-gray-500">
               Links are saved automatically. Open <span className="font-medium">View History</span> to browse past SOW uploads.
             </p>
