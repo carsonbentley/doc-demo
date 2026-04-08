@@ -174,7 +174,7 @@ export default function SowUploadPage() {
   const [pendingIndexMode, setPendingIndexMode] = useState<InputMode | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [workInputMode, setWorkInputMode] = useState<InputMode>('text');
-  const [workTitle, setWorkTitle] = useState('SOW Document');
+  const [workTitle, setWorkTitle] = useState('Document Title');
   const [workText, setWorkText] = useState('');
   const [workPdfFiles, setWorkPdfFiles] = useState<File[]>([]);
   const [uploadInfo, setUploadInfo] = useState<string | null>(null);
@@ -219,7 +219,7 @@ export default function SowUploadPage() {
         setUserId(authData.user?.id ?? null);
         if (!authData.user?.id) throw new Error('You must be logged in to access this page.');
       } catch (e) {
-        setError(e instanceof Error ? e.message : 'Failed to load SOW page.');
+        setError(e instanceof Error ? e.message : 'Failed to load workbench.');
       } finally {
         setLoading(false);
       }
@@ -562,8 +562,8 @@ export default function SowUploadPage() {
 
   const ingestWorkDocument = async (): Promise<string> => {
     if (!userId) throw new Error('You must be signed in.');
-    if (workInputMode === 'text' && !workText.trim()) throw new Error('SOW text is empty.');
-    if (workInputMode === 'pdf' && workPdfFiles.length === 0) throw new Error('Please upload SOW file(s).');
+    if (workInputMode === 'text' && !workText.trim()) throw new Error('Please upload a work folder or document.');
+    if (workInputMode === 'pdf' && workPdfFiles.length === 0) throw new Error('Please upload a work folder or document.');
 
     let response: Response;
     if (workInputMode === 'pdf') {
@@ -595,7 +595,7 @@ export default function SowUploadPage() {
         payload && typeof payload === 'object' && 'detail' in payload
           ? String((payload as { detail?: unknown }).detail)
           : null;
-      throw new Error(detail || `Failed to ingest SOW (${response.status})`);
+      throw new Error(detail || `Failed to ingest work document (${response.status})`);
     }
     const payload = await response.json();
     return payload.work_document_id as string;
@@ -656,7 +656,7 @@ export default function SowUploadPage() {
       }
       setUploadMoreOpen(false);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to upload SOW and link sections.');
+      setError(e instanceof Error ? e.message : 'Failed to upload work document and link sections.');
     } finally {
       setSowCitationsLoading(false);
       setSubmitting(false);
@@ -738,14 +738,14 @@ export default function SowUploadPage() {
   const sowSourceUploadCard = (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
-        <CardTitle className="text-base font-semibold">SOW Source</CardTitle>
+        <CardTitle className="text-base font-semibold">Source Document</CardTitle>
         <Button
           type="button"
           variant="ghost"
           size="icon"
           className="h-8 w-8 shrink-0 text-gray-600"
-          aria-label="SOW link settings"
-          title="SOW link settings"
+          aria-label="Requirement linking settings"
+          title="Requirement Tracing Settings"
           onClick={openSowSettings}
         >
           <Settings className="h-4 w-4" />
@@ -761,23 +761,23 @@ export default function SowUploadPage() {
           </Button>
         </div>
         <div className="space-y-1">
-          <Label htmlFor="workTitle">SOW Title</Label>
+          <Label htmlFor="workTitle">Document Title</Label>
           <Input id="workTitle" value={workTitle} onChange={(e) => setWorkTitle(e.target.value)} />
         </div>
         {workInputMode === 'text' ? (
           <div className="space-y-1">
-            <Label htmlFor="workText">SOW Text</Label>
+            <Label htmlFor="workText">Document Text</Label>
             <Textarea
               id="workText"
               rows={14}
               value={workText}
               onChange={(e) => setWorkText(e.target.value)}
-              placeholder="Paste your SOW content here..."
+              placeholder="Paste your document's contents here..."
             />
           </div>
         ) : (
           <div className="space-y-1">
-            <Label>SOW Files</Label>
+            <Label>Files</Label>
             <div
               className={`rounded-md border-2 border-dashed p-4 transition ${
                 isDropActive ? 'border-blue-400 bg-blue-50' : 'border-gray-300 bg-gray-50'
@@ -859,7 +859,7 @@ export default function SowUploadPage() {
           </div>
         )}
         <Button className="w-full" onClick={handleUploadAndLink} disabled={submitting || !status?.indexed || indexing}>
-          {submitting ? 'Uploading and Linking...' : 'Upload SOW and Generate Links'}
+          {submitting ? 'Uploading and Linking...' : 'Upload and Link to Requirements'}
         </Button>
         {!indexing && !status?.indexed ? (
           <p className="text-xs text-amber-700">Requirements indexing has not completed yet.</p>
@@ -901,7 +901,7 @@ export default function SowUploadPage() {
           <DialogHeader className="pb-4">
             <DialogTitle>Upload and link more documents</DialogTitle>
             <DialogDescription>
-              Add another SOW or template. Section links are saved to this workspace when processing completes.
+              Add another document or template. Section links are saved to this workspace when processing completes.
             </DialogDescription>
           </DialogHeader>
           {sowSourceUploadCard}
@@ -923,14 +923,13 @@ export default function SowUploadPage() {
                   Requirements setup
                 </Button>
                 <h1 className="truncate text-2xl font-bold tracking-tight text-gray-900">Linked documents</h1>
-                <p className="text-sm text-gray-600">Requirements source, extracted statements, and SOW section links.</p>
               </div>
               <div className="flex flex-shrink-0 flex-wrap items-center gap-2">
                 <Button type="button" onClick={() => setUploadMoreOpen(true)}>
                   <Upload className="mr-2 h-4 w-4" />
                   Upload and link more documents
                 </Button>
-                <Button type="button" variant="outline" size="icon" aria-label="SOW link settings" title="SOW link settings" onClick={openSowSettings}>
+                <Button type="button" variant="outline" size="icon" aria-label="Document link settings" title="Document link settings" onClick={openSowSettings}>
                   <Settings className="h-4 w-4" />
                 </Button>
                 <Button variant="outline" onClick={() => router.push(`/app/organizations/${organizationId}/history`)}>
@@ -972,7 +971,7 @@ export default function SowUploadPage() {
             ) : null}
             {requirementsColumn}
             <p className="border-t border-gray-200 pt-6 text-sm text-gray-500">
-              Links are saved automatically. Open <span className="font-medium">View History</span> to browse past SOW uploads.
+              Links are saved automatically. Open <span className="font-medium">View History</span> to browse past document uploads.
             </p>
           </div>
         </div>
@@ -984,8 +983,8 @@ export default function SowUploadPage() {
                 <ArrowLeft className="mr-2 h-4 w-4" />
                 Back to Requirements Setup
               </Button>
-              <h1 className="text-3xl font-bold">SOW Upload and Linking</h1>
-              <p className="text-sm text-gray-600">Step 2: Upload SOW and generate saved section links.</p>
+              <h1 className="text-3xl font-bold">Document Upload and Linking</h1>
+              <p className="text-sm text-gray-600">Step 2: Upload documents and generate saved section links.</p>
             </div>
             <Button variant="outline" onClick={() => router.push(`/app/organizations/${organizationId}/history`)}>
               View History
@@ -1008,9 +1007,9 @@ export default function SowUploadPage() {
       <Dialog open={sowSettingsOpen} onOpenChange={setSowSettingsOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>SOW link settings</DialogTitle>
+            <DialogTitle>Document link settings</DialogTitle>
             <DialogDescription>
-              Adjust matching strictness and how many SOW excerpts appear under each requirement. Preferences are saved
+              Adjust matching strictness and how many potential document sections satisfy each requirement. Preferences are saved
               for this organization in this browser.
             </DialogDescription>
           </DialogHeader>
@@ -1032,7 +1031,7 @@ export default function SowUploadPage() {
               />
               <p className="text-xs text-gray-500">
                 Higher values require stronger overlap between the requirement text and the indexed chunk before a linked
-                SOW citation appears.
+                document citation appears.
               </p>
             </div>
             <div className="space-y-2">
@@ -1049,7 +1048,7 @@ export default function SowUploadPage() {
                   setSowSettingsDraftMaxCitations(v);
                 }}
               />
-              <p className="text-xs text-gray-500">Show at most this many SOW excerpts for each expanded requirement (1–50).</p>
+              <p className="text-xs text-gray-500">Show at most this many document excerpts for each expanded requirement (1–50).</p>
             </div>
           </div>
           <DialogFooter className="gap-2 sm:gap-0">

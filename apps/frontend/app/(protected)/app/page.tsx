@@ -237,7 +237,7 @@ export default function AppDashboard() {
   const handleRunComplianceCheck = async () => {
     try {
       // This would trigger a full compliance check across all sections
-      alert('Open a requirement document to run the guided SOW linking flow.');
+      alert('Open a document and run the linking process to see compliance scores.');
     } catch (error) {
       console.error('Error running compliance check:', error);
     }
@@ -259,10 +259,9 @@ export default function AppDashboard() {
           Defense Requirements Workbench
         </h1>
         <p className="text-lg text-gray-600 max-w-4xl mx-auto mb-6">
-          Upload standards documents and link requirement evidence directly into your draft SOW.
-          Build a traceable first-pass response in minutes with chunking, embeddings, and section-level citations.
+          Upload your documents and regulatory standards to verify compliance and identify gaps with section-level citations.
         </p>
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-6 max-w-4xl mx-auto">
+        {/* <div className="bg-blue-50 border border-blue-200 rounded-lg p-6 max-w-4xl mx-auto">
           <h2 className="text-xl font-semibold text-blue-900 mb-3">How It Works</h2>
           <div className="text-left text-gray-700 space-y-2">
             <p><strong>1. Requirements Ingestion:</strong> Upload standards docs and chunk them into searchable requirement units.</p>
@@ -270,7 +269,7 @@ export default function AppDashboard() {
             <p><strong>3. Semantic Linking:</strong> Match each section to relevant requirement chunks with confidence scores.</p>
             <p><strong>4. Traceable Editing:</strong> Review citations beside each section while iterating on your final text.</p>
           </div>
-        </div>
+        </div> */}
       </div>
 
       {/* Requirement Documents Overview */}
@@ -339,12 +338,12 @@ export default function AppDashboard() {
                       <div className="grid grid-cols-2 gap-1">
                         <Link href={`/app/organizations/${organization.id}`}>
                           <Button className="h-9 w-full justify-center rounded-md bg-white text-gray-900 shadow-sm hover:bg-white">
-                            <span>Open Workspace</span>
+                            <span>Open Workflow</span>
                           </Button>
                         </Link>
                         <Link href={`/app/organizations/${organization.id}/history`}>
                           <Button className="h-9 w-full justify-center rounded-md" variant="ghost">
-                            <span>SOW History</span>
+                            <span>View Document History</span>
                           </Button>
                         </Link>
                       </div>
@@ -378,7 +377,7 @@ export default function AppDashboard() {
               onClick={handleRunComplianceCheck}
             >
               <CheckCircle className="mr-2 h-4 w-4" />
-              Run Guided SOW Linking
+              Run Guided Document Linking
             </Button>
           </div>
         </CardContent>

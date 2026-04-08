@@ -28,7 +28,7 @@ export default function PrivacyPolicyPage() {
         <div className="bg-white rounded-lg shadow-sm border p-8 space-y-8">
           <div>
             <p className="text-lg text-gray-700 leading-relaxed">
-              ARC processes requirements documents and draft SOW content that you upload
+              ARC processes regulatory documents and internal content that you upload
               directly in the app. We use this content to generate semantic links and citations
               for your team workflow. We do not sell your data.
             </p>

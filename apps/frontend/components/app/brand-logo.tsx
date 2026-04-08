@@ -23,7 +23,7 @@ export function BrandLogo({
 }: BrandLogoProps) {
   const img = (
     <Image
-      src="/ARC.png"
+      src="/arc1.png"
       alt="ARC"
       width={width}
       height={height}
