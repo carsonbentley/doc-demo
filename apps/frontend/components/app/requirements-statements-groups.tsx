@@ -64,6 +64,7 @@ export function RequirementsStatementsGroups({
   const [search, setSearch] = useState('');
   const [activeVerb, setActiveVerb] = useState<string>('shall');
   const [visibleCount, setVisibleCount] = useState(20);
+  const [showMissedOnly, setShowMissedOnly] = useState(false);
 
   useEffect(() => {
     const preferred = groups.find((group) => ['shall', 'requires'].includes(group.modal_verb) && group.count > 0);
@@ -86,22 +87,47 @@ export function RequirementsStatementsGroups({
   const filteredItems = useMemo(() => {
     if (!activeGroup) return [];
     const query = search.trim().toLowerCase();
-    if (!query) return activeGroup.items;
-    return activeGroup.items.filter((statement) => {
-      const haystack = [
-        statement.requirement_summary,
-        statement.distilled_text,
-        statement.statement_text,
-        statement.source_quote,
-        statement.section_title,
-        statement.section_reference,
-      ]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase();
-      return haystack.includes(query);
-    });
-  }, [activeGroup, search]);
+    const searched = !query
+      ? activeGroup.items
+      : activeGroup.items.filter((statement) => {
+          const haystack = [
+            statement.requirement_summary,
+            statement.distilled_text,
+            statement.statement_text,
+            statement.source_quote,
+            statement.section_title,
+            statement.section_reference,
+          ]
+            .filter(Boolean)
+            .join(' ')
+            .toLowerCase();
+          return haystack.includes(query);
+        });
+    if (!showMissedOnly || statementSowCitations === undefined) return searched;
+    return searched.filter((statement) => (statementSowCitations[statement.id] ?? []).length === 0);
+  }, [activeGroup, search, showMissedOnly, statementSowCitations]);
+
+  const missedCountByVerb = useMemo(() => {
+    const counts: Record<string, number> = {};
+    if (statementSowCitations === undefined) return counts;
+    for (const group of groups) {
+      counts[group.modal_verb] = group.items.filter((item) => (statementSowCitations[item.id] ?? []).length === 0).length;
+    }
+    return counts;
+  }, [groups, statementSowCitations]);
+
+  const matchedCountByVerb = useMemo(() => {
+    const counts: Record<string, number> = {};
+    if (statementSowCitations === undefined) return counts;
+    for (const group of groups) {
+      counts[group.modal_verb] = group.items.filter((item) => (statementSowCitations[item.id] ?? []).length > 0).length;
+    }
+    return counts;
+  }, [groups, statementSowCitations]);
+
+  const hasMissedInActive = Boolean(activeGroup && (missedCountByVerb[activeGroup.modal_verb] ?? 0) > 0);
+  const isMissed = (statementId: string) =>
+    statementSowCitations !== undefined && (statementSowCitations[statementId] ?? []).length === 0;
 
   const visibleItems = filteredItems.slice(0, visibleCount);
 
@@ -126,9 +152,31 @@ export function RequirementsStatementsGroups({
                 }`}
               >
                 {group.modal_verb.toUpperCase()} · {group.count}
+                {statementSowCitations !== undefined ? (
+                  <span className="ml-1 opacity-80">
+                    ({matchedCountByVerb[group.modal_verb] ?? 0} linked / {missedCountByVerb[group.modal_verb] ?? 0} missed)
+                  </span>
+                ) : null}
               </button>
             ))}
           </div>
+          {statementSowCitations !== undefined ? (
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant={showMissedOnly ? 'default' : 'outline'}
+                onClick={() => {
+                  setShowMissedOnly((v) => !v);
+                  setVisibleCount(20);
+                }}
+                disabled={!hasMissedInActive}
+              >
+                {showMissedOnly ? 'Showing missed only' : 'Show missed only'}
+              </Button>
+              {hasMissedInActive ? <span className="text-xs text-red-700">Unlinked requirements are highlighted.</span> : null}
+            </div>
+          ) : null}
           <Input
             value={search}
             onChange={(e) => {
@@ -151,10 +199,16 @@ export function RequirementsStatementsGroups({
           ) : (
             <div className="space-y-3">
               {visibleItems.map((statement) => (
-                <details key={statement.id} className="rounded-md border p-3">
+                <details
+                  key={statement.id}
+                  className={`rounded-md border p-3 ${isMissed(statement.id) ? 'border-red-200 bg-red-50/60' : ''}`}
+                >
                   <summary className="cursor-pointer list-none">
                     <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-gray-600">
                       <span className="rounded bg-gray-100 px-2 py-1">#{statement.statement_order}</span>
+                      {isMissed(statement.id) ? (
+                        <span className="rounded bg-red-100 px-2 py-1 text-red-700">No linked SOW evidence</span>
+                      ) : null}
                       {statement.section_reference ? (
                         <span className="rounded bg-indigo-100 px-2 py-1 text-indigo-700">
                           {statement.section_reference}

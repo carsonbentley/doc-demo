@@ -33,6 +33,7 @@ CHUNK_OVERLAP = 120
 PDF_TEXT_THRESHOLD = 80
 OCR_CONFIG = "--oem 3 --psm 6"
 PDF_DEBUG_PREVIEW_CHARS = 8000
+OCR_TIMEOUT_SECONDS = 12
 DISTILL_MAX_INPUT_CHARS = 1400
 
 
@@ -83,7 +84,7 @@ class LinkRequirementsRequest(BaseModel):
     work_document_id: str
     requirements_document_id: str | None = None
     max_links_per_section: int = Field(default=3, ge=1, le=20)
-    min_similarity: float = Field(default=0.7, ge=0.0, le=1.0)
+    min_similarity: float = Field(default=0.75, ge=0.0, le=1.0)
 
 
 class SectionLinkResult(BaseModel):
@@ -377,12 +378,22 @@ def _extract_pdf_text_with_hybrid_ocr(file_bytes: bytes) -> Dict[str, Any]:
         if len(normalized_direct) < PDF_TEXT_THRESHOLD:
             try:
                 processed = _preprocess_image_for_ocr(page)
-                ocr_text = pytesseract.image_to_string(processed, config=OCR_CONFIG).strip()
+                ocr_text = pytesseract.image_to_string(
+                    processed,
+                    config=OCR_CONFIG,
+                    timeout=OCR_TIMEOUT_SECONDS,
+                ).strip()
                 if ocr_text:
                     page_text = ocr_text
                     used_ocr = True
             except pytesseract.TesseractNotFoundError:
                 warnings.add("tesseract_not_installed")
+            except RuntimeError as exc:
+                msg = str(exc).lower()
+                if "time" in msg or "timeout" in msg:
+                    warnings.add(f"ocr_timeout_page_{page_number}")
+                else:
+                    warnings.add(f"ocr_failed_page_{page_number}")
             except Exception:
                 warnings.add(f"ocr_failed_page_{page_number}")
 
@@ -1686,15 +1697,18 @@ async def link_work_sections(
     if not sections:
         raise HTTPException(status_code=404, detail="No sections found for work_document_id")
 
-    try:
+    def _load_chunks(requirements_document_id: str | None = None):
         chunk_query = (
             supabase.table("requirements_chunks")
             .select("id, requirements_document_id, chunk_index, chunk_text, metadata, embedding")
             .eq("organization_id", request.organization_id)
         )
-        if request.requirements_document_id:
-            chunk_query = chunk_query.eq("requirements_document_id", request.requirements_document_id)
-        chunks_result = chunk_query.execute()
+        if requirements_document_id:
+            chunk_query = chunk_query.eq("requirements_document_id", requirements_document_id)
+        return chunk_query.execute()
+
+    try:
+        chunks_result = _load_chunks(request.requirements_document_id)
     except Exception as exc:
         raise HTTPException(
             status_code=502,
@@ -1704,6 +1718,34 @@ async def link_work_sections(
             ),
         ) from exc
     chunks = chunks_result.data or []
+
+    if not chunks:
+        try:
+            docs_result = (
+                supabase.table("requirements_documents")
+                .select("id, created_at")
+                .eq("organization_id", request.organization_id)
+                .order("created_at", desc=True)
+                .limit(20)
+                .execute()
+            )
+            for doc in docs_result.data or []:
+                doc_id = doc.get("id")
+                if not doc_id:
+                    continue
+                fallback = _load_chunks(doc_id)
+                fallback_rows = fallback.data or []
+                if fallback_rows:
+                    chunks = fallback_rows
+                    break
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    "Backend cannot resolve fallback requirement chunks from Supabase. "
+                    "Check backend Supabase configuration."
+                ),
+            ) from exc
     if not chunks:
         raise HTTPException(status_code=404, detail="No requirement chunks found for organization")
 
@@ -2019,7 +2061,7 @@ async def requirements_statement_sow_links(
     requirements_document_id: str,
     organization_id: str,
     work_document_id: str,
-    overlap_threshold: float = Query(default=0.7, ge=0.0, le=1.0),
+    overlap_threshold: float = Query(default=0.75, ge=0.0, le=1.0),
     max_citations_per_statement: int = Query(default=3, ge=1, le=50),
     supabase=Depends(get_supabase_client),
 ):

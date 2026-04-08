@@ -8,7 +8,7 @@ export type SowLinkSettings = {
 const STORAGE_PREFIX = 'gc.sowLinkSettings.';
 
 export const DEFAULT_SOW_LINK_SETTINGS: SowLinkSettings = {
-  overlapThreshold: 0.7,
+  overlapThreshold: 0.75,
   maxCitationsPerStatement: 3,
 };
 

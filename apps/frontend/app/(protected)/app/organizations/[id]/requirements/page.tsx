@@ -11,7 +11,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { LoadingSpinner } from '@/components/ui/loading-spinner';
 import { RequirementsStepProgress } from '@/components/app/requirements-step-progress';
-import { clearPendingRequirementsPayload } from '@/lib/workflow/pending-requirements';
+import { clearPendingRequirementsPayload, setPendingRequirementsPayload } from '@/lib/workflow/pending-requirements';
 
 type Organization = {
   id: string;
@@ -26,6 +26,19 @@ type ExistingRequirementsSummary = {
   title: string;
   source_type: string | null;
   source_name: string | null;
+};
+
+type RequirementsDocRow = {
+  id: string;
+  title: string;
+  source_type: string | null;
+  source_name: string | null;
+  metadata?: {
+    processing_status?: string;
+    chunk_total?: number;
+    statement_count?: number;
+    statement_candidates_total?: number;
+  } | null;
 };
 
 const API_BASE_URL =
@@ -56,15 +69,14 @@ export default function RequirementsSetupPage() {
   const [statementCandidatesTotal, setStatementCandidatesTotal] = useState<number | undefined>(undefined);
 
   const refreshExistingRequirements = useCallback(async () => {
-    const latestDocResult = await supabase
+    const docsResult = await supabase
       .from('requirements_documents')
       .select('id, title, source_type, source_name, metadata')
       .eq('organization_id', organizationId)
       .order('created_at', { ascending: false })
-      .limit(1);
-
-    const latest = latestDocResult.data?.[0];
-    if (!latest) {
+      .limit(20);
+    const docs = (docsResult.data || []) as RequirementsDocRow[];
+    if (docs.length === 0) {
       setExistingRequirements(null);
       setRequirementsIndexed(false);
       setChunkCount(0);
@@ -74,30 +86,39 @@ export default function RequirementsSetupPage() {
       return;
     }
 
-    const metadata =
-      (latest.metadata as {
-        processing_status?: string;
-        chunk_total?: number;
-        statement_count?: number;
-        statement_candidates_total?: number;
-      } | null) ?? null;
+    const countsByDocId = new Map<string, number>();
+    for (const doc of docs) {
+      const countResult = await supabase
+        .from('requirements_chunks')
+        .select('id', { count: 'exact', head: true })
+        .eq('organization_id', organizationId)
+        .eq('requirements_document_id', doc.id);
+      countsByDocId.set(doc.id, countResult.count || 0);
+    }
 
-    const countResult = await supabase
-      .from('requirements_chunks')
-      .select('id', { count: 'exact', head: true })
-      .eq('organization_id', organizationId)
-      .eq('requirements_document_id', latest.id);
+    const preferredDoc =
+      docs.find((doc) => {
+        const procCandidate = doc.metadata?.processing_status ?? null;
+        const chunksCandidate = countsByDocId.get(doc.id) || 0;
+        return (
+          procCandidate === 'indexing' ||
+          procCandidate === 'distilling' ||
+          procCandidate === 'indexed' ||
+          chunksCandidate > 0
+        );
+      }) || docs[0];
 
-    const chunks = countResult.count || 0;
+    const metadata = preferredDoc.metadata ?? null;
+    const chunks = countsByDocId.get(preferredDoc.id) || 0;
     const proc = metadata?.processing_status ?? null;
     const indexed =
       proc === 'indexed' ? true : proc === 'indexing' || proc === 'distilling' ? false : chunks > 0;
 
     setExistingRequirements({
-      id: latest.id,
-      title: latest.title,
-      source_type: latest.source_type,
-      source_name: latest.source_name,
+      id: preferredDoc.id,
+      title: preferredDoc.title,
+      source_type: preferredDoc.source_type,
+      source_name: preferredDoc.source_name,
     });
     setRequirementsIndexed(indexed);
     setChunkCount(chunks);
@@ -143,7 +164,7 @@ export default function RequirementsSetupPage() {
     return `Request failed (${response.status})`;
   };
 
-  const ingestRequirementsDocument = async () => {
+  const queueRequirementsDocument = async () => {
     if (!userId) throw new Error('You must be signed in.');
     if (requirementsInputMode === 'text' && !requirementsText.trim()) {
       throw new Error('Requirements text is empty.');
@@ -153,34 +174,14 @@ export default function RequirementsSetupPage() {
     }
 
     const title = requirementsTitle.trim() || 'Requirements Document';
-
-    if (requirementsInputMode === 'pdf') {
-      const formData = new FormData();
-      formData.append('organization_id', organizationId);
-      formData.append('uploaded_by', userId);
-      formData.append('title', title);
-      formData.append('file', requirementsPdfFile!);
-      formData.append('source_name', requirementsPdfFile!.name);
-      const res = await fetch(`${API_BASE_URL}/v1/workbench/requirements/ingest-pdf`, {
-        method: 'POST',
-        body: formData,
-      });
-      if (!res.ok) throw new Error(await parseApiError(res));
-      return;
-    }
-
-    const res = await fetch(`${API_BASE_URL}/v1/workbench/requirements/ingest`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        organization_id: organizationId,
-        uploaded_by: userId,
-        title,
-        raw_text: requirementsText,
-        source_type: 'text',
-      }),
+    setPendingRequirementsPayload({
+      organizationId,
+      uploadedBy: userId,
+      title,
+      mode: requirementsInputMode,
+      rawText: requirementsInputMode === 'text' ? requirementsText : undefined,
+      file: requirementsInputMode === 'pdf' ? requirementsPdfFile : null,
     });
-    if (!res.ok) throw new Error(await parseApiError(res));
   };
 
   const handleSave = async () => {
@@ -188,10 +189,8 @@ export default function RequirementsSetupPage() {
     setError(null);
     try {
       clearPendingRequirementsPayload();
-      await ingestRequirementsDocument();
-      clearPendingRequirementsPayload();
-      await refreshExistingRequirements();
-      router.push(`/app/organizations/${organizationId}/sow`);
+      await queueRequirementsDocument();
+      router.push(`/app/organizations/${organizationId}/sow?autoIndex=1`);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to save requirements document.');
     } finally {

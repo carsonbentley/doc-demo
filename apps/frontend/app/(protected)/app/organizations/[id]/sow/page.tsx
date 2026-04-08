@@ -91,6 +91,21 @@ type StatementSowCitation = {
 const API_BASE_URL =
   (process.env.NEXT_PUBLIC_AGENT_API_URL?.trim() || 'http://127.0.0.1:8002').replace(/\/$/, '');
 
+type RequirementsDocRow = {
+  id: string;
+  title: string | null;
+  source_type: string | null;
+  source_name: string | null;
+  raw_text: string | null;
+  metadata?: {
+    processing_status?: string;
+    chunk_total?: number;
+    statement_count?: number;
+    statement_candidates_total?: number;
+  } | null;
+  created_at?: string;
+};
+
 function mapHistoryDetailToLinkedSections(payload: {
   sections?: Array<{
     work_section_id: string;
@@ -122,6 +137,27 @@ function mapHistoryDetailToLinkedSections(payload: {
   }));
 }
 
+function inferRequirementsDocumentIdFromSections(sections: LinkedSection[]): string | null {
+  const counts = new Map<string, number>();
+  for (const section of sections) {
+    for (const link of section.links) {
+      const docId = link.requirements_document_id;
+      if (!docId) continue;
+      counts.set(docId, (counts.get(docId) || 0) + 1);
+    }
+  }
+  if (counts.size === 0) return null;
+  let bestId: string | null = null;
+  let bestCount = -1;
+  for (const [id, count] of counts) {
+    if (count > bestCount) {
+      bestCount = count;
+      bestId = id;
+    }
+  }
+  return bestId;
+}
+
 export default function SowUploadPage() {
   const params = useParams();
   const searchParams = useSearchParams();
@@ -145,13 +181,20 @@ export default function SowUploadPage() {
   const [isDropActive, setIsDropActive] = useState(false);
   const [linkedSections, setLinkedSections] = useState<LinkedSection[]>([]);
   const [linkedWorkDocumentId, setLinkedWorkDocumentId] = useState<string | null>(null);
+  const [linkedRequirementsDocumentId, setLinkedRequirementsDocumentId] = useState<string | null>(null);
   const [statementGroups, setStatementGroups] = useState<RequirementStatementGroup[]>([]);
   const [statementSowCitations, setStatementSowCitations] = useState<Record<string, StatementSowCitation[]>>({});
   const [sowCitationsLoading, setSowCitationsLoading] = useState(false);
+  const [citationsContext, setCitationsContext] = useState<{
+    requirementsDocumentId: string;
+    workDocumentId: string;
+    overlapThreshold: number;
+    maxCitationsPerStatement: number;
+  } | null>(null);
   const [sowLinkSettings, setSowLinkSettings] = useState<SowLinkSettings>(DEFAULT_SOW_LINK_SETTINGS);
   const [sowSettingsOpen, setSowSettingsOpen] = useState(false);
   const [uploadMoreOpen, setUploadMoreOpen] = useState(false);
-  const [sowSettingsDraftOverlapPct, setSowSettingsDraftOverlapPct] = useState(70);
+  const [sowSettingsDraftOverlapPct, setSowSettingsDraftOverlapPct] = useState(75);
   const [sowSettingsDraftMaxCitations, setSowSettingsDraftMaxCitations] = useState(3);
   const filesInputRef = useRef<HTMLInputElement | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
@@ -164,6 +207,8 @@ export default function SowUploadPage() {
   useEffect(() => {
     setLinkedWorkDocumentId(null);
     setLinkedSections([]);
+    setLinkedRequirementsDocumentId(null);
+    setCitationsContext(null);
   }, [organizationId]);
 
   useEffect(() => {
@@ -185,21 +230,20 @@ export default function SowUploadPage() {
 
   const pollRequirementsStatus = async () => {
     try {
-      const latestDocResult = await supabase
+      const docsResult = await supabase
         .from('requirements_documents')
         .select('id, title, source_type, source_name, raw_text, metadata, created_at')
         .eq('organization_id', organizationId)
         .order('created_at', { ascending: false })
-        .limit(1);
-
-      const latest = latestDocResult.data?.[0];
+        .limit(20);
+      const docs = (docsResult.data || []) as RequirementsDocRow[];
       const hasPendingAutoIndex =
         searchParams.get('autoIndex') === '1' &&
         !!userId &&
         !!getPendingRequirementsPayload(organizationId) &&
         !indexingStarted;
 
-      if (!latest) {
+      if (docs.length === 0) {
         setStatus({
           indexed: false,
           latest_requirements_document_id: null,
@@ -212,20 +256,30 @@ export default function SowUploadPage() {
         return false;
       }
 
-      const countResult = await supabase
-        .from('requirements_chunks')
-        .select('id', { count: 'exact', head: true })
-        .eq('organization_id', organizationId)
-        .eq('requirements_document_id', latest.id);
+      const countsByDocId = new Map<string, number>();
+      for (const doc of docs) {
+        const countResult = await supabase
+          .from('requirements_chunks')
+          .select('id', { count: 'exact', head: true })
+          .eq('organization_id', organizationId)
+          .eq('requirements_document_id', doc.id);
+        countsByDocId.set(doc.id, countResult.count || 0);
+      }
 
-      const chunkCount = countResult.count || 0;
-      const metadata =
-        (latest.metadata as {
-          processing_status?: string;
-          chunk_total?: number;
-          statement_count?: number;
-          statement_candidates_total?: number;
-        } | null) ?? null;
+      const preferredDoc =
+        docs.find((doc) => {
+          const procCandidate = doc.metadata?.processing_status ?? null;
+          const chunksCandidate = countsByDocId.get(doc.id) || 0;
+          return (
+            procCandidate === 'indexing' ||
+            procCandidate === 'distilling' ||
+            procCandidate === 'indexed' ||
+            chunksCandidate > 0
+          );
+        }) || docs[0];
+
+      const chunkCount = countsByDocId.get(preferredDoc.id) || 0;
+      const metadata = preferredDoc.metadata ?? null;
       const chunkTotal = metadata?.chunk_total;
       const statementCount = metadata?.statement_count ?? 0;
       const statementCandidatesTotal = metadata?.statement_candidates_total;
@@ -243,11 +297,11 @@ export default function SowUploadPage() {
       setStatus({
         indexed: effectiveIndexed,
         processing_status: processingStatus,
-        latest_requirements_document_id: latest.id,
-        latest_title: latest.title,
-        latest_source_type: latest.source_type,
-        latest_source_name: latest.source_name,
-        latest_raw_text: latest.raw_text,
+        latest_requirements_document_id: preferredDoc.id,
+        latest_title: preferredDoc.title,
+        latest_source_type: preferredDoc.source_type,
+        latest_source_name: preferredDoc.source_name,
+        latest_raw_text: preferredDoc.raw_text,
         chunk_count: chunkCount,
         chunk_total: chunkTotal,
         statement_count: statementCount,
@@ -347,15 +401,17 @@ export default function SowUploadPage() {
     void runBackgroundIndexing();
   }, [searchParams, userId, indexingStarted, organizationId, router]);
 
+  const activeRequirementsDocumentId = linkedRequirementsDocumentId ?? status?.latest_requirements_document_id ?? null;
+
   useEffect(() => {
     const loadStatements = async () => {
-      if (!status?.latest_requirements_document_id) {
+      if (!activeRequirementsDocumentId) {
         setStatementGroups([]);
         return;
       }
       try {
         const response = await fetch(
-          `${API_BASE_URL}/v1/workbench/requirements/${status.latest_requirements_document_id}/statements?organization_id=${organizationId}`
+          `${API_BASE_URL}/v1/workbench/requirements/${activeRequirementsDocumentId}/statements?organization_id=${organizationId}`
         );
         if (!response.ok) return;
         const payload = await response.json();
@@ -369,7 +425,7 @@ export default function SowUploadPage() {
       void loadStatements();
     }, 1500);
     return () => clearInterval(pollId);
-  }, [status?.latest_requirements_document_id, organizationId]);
+  }, [activeRequirementsDocumentId, organizationId]);
 
   useEffect(() => {
     if (!organizationId) return;
@@ -409,7 +465,12 @@ export default function SowUploadPage() {
         );
         if (!response.ok || cancelled) return;
         const payload = await response.json();
-        if (!cancelled) setLinkedSections(mapHistoryDetailToLinkedSections(payload));
+        if (!cancelled) {
+          const sections = mapHistoryDetailToLinkedSections(payload);
+          setLinkedSections(sections);
+          const inferredReqDocId = inferRequirementsDocumentIdFromSections(sections);
+          setLinkedRequirementsDocumentId((prev) => prev ?? inferredReqDocId);
+        }
       } catch {
         if (!cancelled) setLinkedSections([]);
       }
@@ -424,38 +485,65 @@ export default function SowUploadPage() {
     () => statementGroups.reduce((acc, g) => acc + g.count, 0),
     [statementGroups]
   );
+  const linkedRequirementCount = useMemo(() => {
+    if (!linkedWorkDocumentId) return 0;
+    return Object.values(statementSowCitations).filter((rows) => rows.length > 0).length;
+  }, [linkedWorkDocumentId, statementSowCitations]);
+  const missedRequirementCount = Math.max(statementRowTotal - linkedRequirementCount, 0);
+  const coveragePct = statementRowTotal > 0 ? Math.round((linkedRequirementCount / statementRowTotal) * 100) : 0;
+
+  const fetchStatementSowCitations = async (
+    requirementsDocumentId: string,
+    workDocumentId: string
+  ): Promise<Record<string, StatementSowCitation[]>> => {
+    const params = new URLSearchParams({
+      organization_id: organizationId,
+      work_document_id: workDocumentId,
+      overlap_threshold: String(sowLinkSettings.overlapThreshold),
+      max_citations_per_statement: String(sowLinkSettings.maxCitationsPerStatement),
+    });
+    const response = await fetch(
+      `${API_BASE_URL}/v1/workbench/requirements/${requirementsDocumentId}/statement-sow-links?${params.toString()}`
+    );
+    if (!response.ok) return {};
+    const payload = await response.json();
+    const rows = (payload.statements || []) as {
+      requirement_statement_id: string;
+      citations: StatementSowCitation[];
+    }[];
+    const next: Record<string, StatementSowCitation[]> = {};
+    for (const row of rows) {
+      next[row.requirement_statement_id] = row.citations || [];
+    }
+    return next;
+  };
 
   useEffect(() => {
     const loadStatementSowCitations = async () => {
-      if (!status?.latest_requirements_document_id || !linkedWorkDocumentId) {
+      if (!activeRequirementsDocumentId || !linkedWorkDocumentId) {
         setStatementSowCitations({});
+        setCitationsContext(null);
+        return;
+      }
+      if (
+        citationsContext &&
+        citationsContext.requirementsDocumentId === activeRequirementsDocumentId &&
+        citationsContext.workDocumentId === linkedWorkDocumentId &&
+        citationsContext.overlapThreshold === sowLinkSettings.overlapThreshold &&
+        citationsContext.maxCitationsPerStatement === sowLinkSettings.maxCitationsPerStatement
+      ) {
         return;
       }
       setSowCitationsLoading(true);
       try {
-        const params = new URLSearchParams({
-          organization_id: organizationId,
-          work_document_id: linkedWorkDocumentId,
-          overlap_threshold: String(sowLinkSettings.overlapThreshold),
-          max_citations_per_statement: String(sowLinkSettings.maxCitationsPerStatement),
-        });
-        const response = await fetch(
-          `${API_BASE_URL}/v1/workbench/requirements/${status.latest_requirements_document_id}/statement-sow-links?${params.toString()}`
-        );
-        if (!response.ok) {
-          setStatementSowCitations({});
-          return;
-        }
-        const payload = await response.json();
-        const rows = (payload.statements || []) as {
-          requirement_statement_id: string;
-          citations: StatementSowCitation[];
-        }[];
-        const next: Record<string, StatementSowCitation[]> = {};
-        for (const row of rows) {
-          next[row.requirement_statement_id] = row.citations || [];
-        }
+        const next = await fetchStatementSowCitations(activeRequirementsDocumentId, linkedWorkDocumentId);
         setStatementSowCitations(next);
+        setCitationsContext({
+          requirementsDocumentId: activeRequirementsDocumentId,
+          workDocumentId: linkedWorkDocumentId,
+          overlapThreshold: sowLinkSettings.overlapThreshold,
+          maxCitationsPerStatement: sowLinkSettings.maxCitationsPerStatement,
+        });
       } catch {
         setStatementSowCitations({});
       } finally {
@@ -464,7 +552,7 @@ export default function SowUploadPage() {
     };
     void loadStatementSowCitations();
   }, [
-    status?.latest_requirements_document_id,
+    activeRequirementsDocumentId,
     linkedWorkDocumentId,
     organizationId,
     statementRowTotal,
@@ -531,18 +619,34 @@ export default function SowUploadPage() {
     if (!response.ok) throw new Error(`Failed to link sections (${response.status})`);
     const payload = await response.json();
     const nextSections = payload.linked_sections || [];
-    setLinkedSections(nextSections);
-    return nextSections.length;
+    return nextSections as LinkedSection[];
   };
 
   const handleUploadAndLink = async () => {
     setSubmitting(true);
     setError(null);
     setUploadInfo(null);
+    setSowCitationsLoading(true);
     try {
       const workDocumentId = await ingestWorkDocument();
-      const linkedSectionCount = await linkSections(workDocumentId);
+      const nextSections = await linkSections(workDocumentId);
+      const inferredReqDocId = inferRequirementsDocumentIdFromSections(nextSections);
+      const requirementsDocumentId = inferredReqDocId ?? status?.latest_requirements_document_id;
+      if (!requirementsDocumentId) {
+        throw new Error('Requirements document has not been indexed yet.');
+      }
+      const nextCitations = await fetchStatementSowCitations(requirementsDocumentId, workDocumentId);
+      setStatementSowCitations(nextCitations);
+      setCitationsContext({
+        requirementsDocumentId,
+        workDocumentId,
+        overlapThreshold: sowLinkSettings.overlapThreshold,
+        maxCitationsPerStatement: sowLinkSettings.maxCitationsPerStatement,
+      });
+      setLinkedRequirementsDocumentId(requirementsDocumentId);
       setLinkedWorkDocumentId(workDocumentId);
+      setLinkedSections(nextSections);
+      const linkedSectionCount = nextSections.length;
       if (workInputMode === 'pdf') {
         setUploadInfo(
           linkedSectionCount === 0
@@ -554,6 +658,7 @@ export default function SowUploadPage() {
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to upload SOW and link sections.');
     } finally {
+      setSowCitationsLoading(false);
       setSubmitting(false);
     }
   };
@@ -838,6 +943,33 @@ export default function SowUploadPage() {
           <div className="mx-auto max-w-[1600px] space-y-6 px-4 pt-6 sm:px-6 lg:px-8">
             {indexing || !status?.indexed ? stepProgress : null}
             {error ? <div className="rounded-md bg-red-50 p-3 text-sm text-red-700">{error}</div> : null}
+            {statementRowTotal > 0 ? (
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">Coverage overview</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid gap-3 sm:grid-cols-4">
+                    <div className="rounded-md border bg-white p-3">
+                      <p className="text-xs uppercase tracking-wide text-gray-500">Test coverage</p>
+                      <p className="text-2xl font-semibold text-gray-900">{coveragePct}%</p>
+                    </div>
+                    <div className="rounded-md border bg-white p-3">
+                      <p className="text-xs uppercase tracking-wide text-gray-500">Total requirements</p>
+                      <p className="text-2xl font-semibold text-gray-900">{statementRowTotal}</p>
+                    </div>
+                    <div className="rounded-md border bg-emerald-50 p-3">
+                      <p className="text-xs uppercase tracking-wide text-emerald-700">Linked requirements</p>
+                      <p className="text-2xl font-semibold text-emerald-900">{linkedRequirementCount}</p>
+                    </div>
+                    <div className="rounded-md border bg-red-50 p-3">
+                      <p className="text-xs uppercase tracking-wide text-red-700">Missed requirements</p>
+                      <p className="text-2xl font-semibold text-red-800">{missedRequirementCount}</p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            ) : null}
             {requirementsColumn}
             <p className="border-t border-gray-200 pt-6 text-sm text-gray-500">
               Links are saved automatically. Open <span className="font-medium">View History</span> to browse past SOW uploads.
