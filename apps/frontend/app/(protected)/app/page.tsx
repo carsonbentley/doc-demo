@@ -12,7 +12,6 @@ import { DeleteOrganizationModal } from '@/components/app/delete-organization-mo
 import {
   FileText,
   Target,
-  ArrowRight,
   Plus,
   CheckCircle,
   Trash2
@@ -301,8 +300,6 @@ export default function AppDashboard() {
         ) : (
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
             {organizations.map((organization) => {
-              const status = organization.status ?? 'draft';
-              const statusLabel = status.replace(/_/g, ' ');
               return (
               <Card key={organization.id} className="hover:shadow-md transition-shadow">
                 <CardHeader className="pb-3">
@@ -314,13 +311,6 @@ export default function AppDashboard() {
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
-                      <div className={`px-2 py-1 rounded-full text-xs font-medium ${
-                        status === 'completed' ? 'bg-green-100 text-green-800' :
-                        status === 'in_progress' ? 'bg-yellow-100 text-yellow-800' :
-                        'bg-gray-100 text-gray-800'
-                      }`}>
-                        {statusLabel}
-                      </div>
                       <Button
                         variant="ghost"
                         size="sm"
@@ -339,25 +329,26 @@ export default function AppDashboard() {
                   <p className="text-sm text-gray-600 mb-4">
                     {organization.description || 'Requirements workbench'}
                   </p>
-                  <div className="space-y-2">
-                    <div className="flex justify-between text-xs text-gray-500">
-                      <span>Status: {statusLabel}</span>
-                      {organization.due_date && (
-                        <span>Due: {new Date(organization.due_date).toLocaleDateString()}</span>
-                      )}
+                  <div className="space-y-3">
+                    {organization.due_date ? (
+                      <div className="text-right text-xs text-gray-500">
+                        Due: {new Date(organization.due_date).toLocaleDateString()}
+                      </div>
+                    ) : null}
+                    <div className="rounded-lg border bg-gray-50 p-1">
+                      <div className="grid grid-cols-2 gap-1">
+                        <Link href={`/app/organizations/${organization.id}`}>
+                          <Button className="h-9 w-full justify-center rounded-md bg-white text-gray-900 shadow-sm hover:bg-white">
+                            <span>Open Workspace</span>
+                          </Button>
+                        </Link>
+                        <Link href={`/app/organizations/${organization.id}/history`}>
+                          <Button className="h-9 w-full justify-center rounded-md" variant="ghost">
+                            <span>SOW History</span>
+                          </Button>
+                        </Link>
+                      </div>
                     </div>
-                    <Link href={`/app/organizations/${organization.id}`}>
-                      <Button className="w-full" variant="outline">
-                        <span>Open Workflow</span>
-                        <ArrowRight className="ml-2 h-4 w-4" />
-                      </Button>
-                    </Link>
-                    <Link href={`/app/organizations/${organization.id}/history`}>
-                      <Button className="w-full" variant="outline">
-                        <span>View SOW History</span>
-                        <ArrowRight className="ml-2 h-4 w-4" />
-                      </Button>
-                    </Link>
                   </div>
                 </CardContent>
               </Card>

@@ -716,8 +716,8 @@ export default function SowUploadPage() {
       {status?.latest_requirements_document_id ? (
         <RequirementsStatementsGroups
           groups={statementGroups}
-          statementSowCitations={linkedWorkDocumentId ? statementSowCitations : undefined}
-          sowCitationsLoading={Boolean(linkedWorkDocumentId) && sowCitationsLoading}
+          statementSowCitations={hasLinkedSections ? statementSowCitations : undefined}
+          sowCitationsLoading={hasLinkedSections && sowCitationsLoading}
         />
       ) : (
         <Card>
