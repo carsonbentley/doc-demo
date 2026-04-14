@@ -571,12 +571,12 @@ export default function SowUploadPage() {
       statementId: statement.id,
       sourcePage: statement.source_page ?? null,
       hasTextAnchor: Boolean(statement.text_anchor?.snippet),
-      snippetPreview: (statement.text_anchor?.snippet || statement.source_quote || statement.statement_text || '').slice(0, 160),
+      snippetPreview: (statement.source_quote || statement.statement_text || '').slice(0, 160),
     });
     setViewerTarget({
       documentType: 'requirements',
       page: statement.source_page ?? null,
-      snippet: statement.text_anchor?.snippet || statement.source_quote || statement.statement_text,
+      snippet: statement.source_quote || statement.statement_text,
       label: statement.requirement_summary || statement.distilled_text || statement.statement_text,
       statementId: statement.id,
     });
@@ -796,7 +796,7 @@ export default function SowUploadPage() {
         group.items.map((statement) => ({
           id: statement.id,
           page: statement.source_page ?? null,
-          snippet: statement.text_anchor?.snippet || statement.source_quote || statement.statement_text,
+          snippet: statement.source_quote || statement.statement_text,
           summary: statement.requirement_summary || statement.distilled_text || statement.statement_text,
         }))
       ),

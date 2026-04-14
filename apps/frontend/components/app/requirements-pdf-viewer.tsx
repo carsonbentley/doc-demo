@@ -45,6 +45,8 @@ type OverlayRect = {
   isActive: boolean;
 };
 
+type TextRange = { start: number; end: number };
+
 function normalizeSnippet(snippet?: string | null): string[] {
   if (!snippet) return [];
   return snippet
@@ -53,6 +55,104 @@ function normalizeSnippet(snippet?: string | null): string[] {
     .split(/\s+/)
     .filter((token) => token.length > 2)
     .slice(0, 14);
+}
+
+function normalizePhrase(text?: string | null): string {
+  if (!text) return '';
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function buildRanges(parts: string[]): { joined: string; ranges: TextRange[] } {
+  const ranges: TextRange[] = [];
+  let cursor = 0;
+  const joinedParts: string[] = [];
+  for (const part of parts) {
+    const value = normalizePhrase(part);
+    joinedParts.push(value);
+    const start = cursor;
+    const end = start + value.length;
+    ranges.push({ start, end });
+    cursor = end + 1;
+  }
+  return { joined: joinedParts.join(' '), ranges };
+}
+
+/**
+ * Map the full source quote onto `joined` (normalized per-part text with single spaces).
+ * Prefer exact substring, then whitespace-tolerant scan, then prefix probe + extend to full phrase.
+ * No artificial length cap — highlights should cover the same text as the Source quote field.
+ */
+function findMatchingRange(joined: string, phrase: string): TextRange | null {
+  if (!joined || !phrase) return null;
+  const p = normalizePhrase(phrase);
+  if (!p) return null;
+
+  const directIdx = joined.indexOf(p);
+  if (directIdx >= 0) return { start: directIdx, end: directIdx + p.length };
+
+  const lenJ = joined.length;
+  const lenP = p.length;
+  let best: TextRange | null = null;
+  let bestPi = 0;
+
+  for (let s = 0; s < lenJ; s += 1) {
+    if (p[0] !== joined[s]) continue;
+    let pi = 0;
+    let ji = s;
+    while (pi < lenP && ji < lenJ) {
+      const cpc = p[pi];
+      const cjc = joined[ji];
+      if (cpc === cjc) {
+        pi += 1;
+        ji += 1;
+      } else if (cjc === ' ' && cpc !== ' ') {
+        ji += 1;
+      } else if (cpc === ' ' && cjc !== ' ') {
+        pi += 1;
+      } else {
+        break;
+      }
+    }
+    if (pi > bestPi) {
+      bestPi = pi;
+      best = { start: s, end: ji };
+    }
+  }
+
+  const threshold = Math.max(12, Math.floor(lenP * 0.45));
+  if (best && bestPi >= threshold) return best;
+
+  const words = p.split(' ').filter(Boolean);
+  if (words.length >= 4) {
+    const probeN = Math.min(10, words.length);
+    const probe = words.slice(0, probeN).join(' ');
+    const probeIdx = joined.indexOf(probe);
+    if (probeIdx >= 0) {
+      let pi = 0;
+      let ji = probeIdx;
+      while (pi < lenP && ji < lenJ) {
+        const cpc = p[pi];
+        const cjc = joined[ji];
+        if (cpc === cjc) {
+          pi += 1;
+          ji += 1;
+        } else if (cjc === ' ' && cpc !== ' ') {
+          ji += 1;
+        } else if (cpc === ' ' && cjc !== ' ') {
+          pi += 1;
+        } else {
+          break;
+        }
+      }
+      if (pi >= threshold) return { start: probeIdx, end: ji };
+    }
+  }
+
+  return best && bestPi >= 8 ? best : null;
 }
 
 export function RequirementsPdfViewer({
@@ -187,13 +287,18 @@ export function RequirementsPdfViewer({
     return (highlightAnchors || []).filter((anchor) => !anchor.page || anchor.page === activePage);
   }, [highlightAnchors, activePage]);
 
+  const activePageAnchors = useMemo(() => {
+    if (!activeAnchorId) return [];
+    return pageAnchors.filter((anchor) => anchor.id === activeAnchorId);
+  }, [pageAnchors, activeAnchorId]);
+
   const anchorTokens = useMemo(() => {
-    return pageAnchors.map((anchor) => ({
+    return activePageAnchors.map((anchor) => ({
       id: anchor.id,
       words: normalizeSnippet(anchor.snippet),
       summaryWords: normalizeSnippet(anchor.summary).slice(0, 8),
     }));
-  }, [pageAnchors]);
+  }, [activePageAnchors]);
 
   useEffect(() => {
     applyTextLayerHighlights();
@@ -224,69 +329,67 @@ export function RequirementsPdfViewer({
         const items = textContent.items || [];
 
         const nextRects: OverlayRect[] = [];
-        for (const item of items) {
-          if (!('str' in item)) continue;
-          const str = String(item.str || '');
-          const normalized = str.toLowerCase().replace(/[^a-z0-9\s]/g, ' ');
-          if (!normalized.trim()) continue;
+        const textItems = (items as Array<Record<string, unknown>>).filter(
+          (item) => typeof item.str === 'string' && Array.isArray(item.transform) && typeof item.width === 'number'
+        );
+        const itemStrings = textItems.map((item) => String(item.str || ''));
+        const { joined: pageJoined, ranges: pageRanges } = buildRanges(itemStrings);
+        const activePhrase = normalizePhrase(activePageAnchors[0]?.snippet || focusSnippet || '');
+        const phraseWindow = findMatchingRange(pageJoined, activePhrase);
 
-          let matchedAnchorId: string | null = null;
-          for (const anchor of anchorTokens) {
-            const matched = anchor.words.some((word) => normalized.includes(word));
-            if (matched) {
-              matchedAnchorId = anchor.id;
-              break;
-            }
+        if (activeAnchorId && phraseWindow) {
+          for (let i = 0; i < textItems.length; i += 1) {
+            const item = textItems[i];
+            const charRange = pageRanges[i];
+            const intersects =
+              charRange.end >= phraseWindow.start &&
+              charRange.start <= phraseWindow.end;
+            if (!intersects) continue;
+            const rawTransform = (item.transform as number[]) || [1, 0, 0, 1, 0, 0];
+            const tx = pdfjs.Util.transform(scaledViewport.transform, rawTransform);
+            const x = Number(tx[4] || 0);
+            const y = Number(tx[5] || 0);
+            const width = Math.max(8, Number(item.width || 0) * scale);
+            const height = Math.max(8, Math.abs(Number(tx[3] || tx[0] || 10)));
+            const top = y - height;
+            const left = x;
+            const inBounds =
+              left + width >= 0 &&
+              top + height >= 0 &&
+              left <= scaledViewport.width &&
+              top <= scaledViewport.height;
+            if (!inBounds) continue;
+            nextRects.push({
+              left,
+              top,
+              width,
+              height,
+              isActive: true,
+            });
           }
-          if (!matchedAnchorId) continue;
-
-          const rawTransform = item.transform || [1, 0, 0, 1, 0, 0];
-          // Convert text item transform into viewport coordinates.
-          const tx = pdfjs.Util.transform(scaledViewport.transform, rawTransform);
-          const x = Number(tx[4] || 0);
-          const y = Number(tx[5] || 0);
-          const width = Math.max(8, Number(item.width || 0) * scale);
-          const height = Math.max(8, Math.abs(Number(tx[3] || tx[0] || 10)));
-          const top = y - height;
-          const left = x;
-          const inBounds =
-            left + width >= 0 &&
-            top + height >= 0 &&
-            left <= scaledViewport.width &&
-            top <= scaledViewport.height;
-          if (!inBounds) continue;
-
-          nextRects.push({
-            left,
-            top,
-            width,
-            height,
-            isActive: Boolean(activeAnchorId && matchedAnchorId === activeAnchorId),
-          });
         }
 
-        if (nextRects.length === 0) {
+        if (activeAnchorId && nextRects.length === 0) {
           const wordsForPage =
             (ocrWordBoxes || []).find((entry) => entry.page_number === activePage)?.words || [];
+          const { joined: ocrJoined, ranges: ocrRanges } = buildRanges(wordsForPage.map((w) => String(w.text || '')));
+          const ocrPhraseWindow = findMatchingRange(ocrJoined, activePhrase);
           const wordRects: OverlayRect[] = [];
-          for (const wordBox of wordsForPage) {
-            const normalizedWord = String(wordBox.text || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-            if (!normalizedWord) continue;
-            let matchedAnchorId: string | null = null;
-            for (const anchor of anchorTokens) {
-              const tokenSet = new Set([...anchor.words, ...anchor.summaryWords].map((w) => w.replace(/[^a-z0-9]/g, '')));
-              if (tokenSet.has(normalizedWord)) {
-                matchedAnchorId = anchor.id;
-                break;
-              }
-            }
-            if (!matchedAnchorId) continue;
+          for (let i = 0; i < wordsForPage.length; i += 1) {
+            const wordBox = wordsForPage[i];
+            const charRange = ocrRanges[i];
+            const intersects = Boolean(
+              ocrPhraseWindow &&
+                charRange.end >= ocrPhraseWindow.start &&
+                charRange.start <= ocrPhraseWindow.end
+            );
+            if (!intersects) continue;
             wordRects.push({
               left: Number(wordBox.x || 0) * PAGE_RENDER_WIDTH,
               top: Number(wordBox.y || 0) * scaledViewport.height,
               width: Math.max(4, Number(wordBox.width || 0) * PAGE_RENDER_WIDTH),
               height: Math.max(6, Number(wordBox.height || 0) * scaledViewport.height),
-              isActive: Boolean(activeAnchorId && matchedAnchorId === activeAnchorId),
+              isActive: true,
             });
           }
           nextRects.push(...wordRects);
@@ -321,7 +424,7 @@ export function RequirementsPdfViewer({
     return () => {
       cancelled = true;
     };
-  }, [pdfDoc, activePage, activeAnchorId, anchorTokens]);
+  }, [pdfDoc, activePage, activeAnchorId, activePageAnchors, focusSnippet, ocrWordBoxes]);
 
   const applyTextLayerHighlights = () => {
     const root = viewerRef.current;
@@ -337,59 +440,19 @@ export function RequirementsPdfViewer({
         span.style.borderRadius = '';
       }
     });
-    const spanTexts = Array.from(spans).map((span) =>
-      ((span.textContent || '') as string).toLowerCase().replace(/[^a-z0-9\s]/g, ' ')
-    );
+    const spanTexts = Array.from(spans).map((span) => ((span.textContent || '') as string));
+    const { joined: spansJoined, ranges: spanRanges } = buildRanges(spanTexts);
 
-    // Active mode: highlight the most likely phrase neighborhood.
+    // Active mode: highlight only the contiguous phrase region for selected requirement.
     if (activeAnchorId) {
-      const activeAnchor = anchorTokens.find((a) => a.id === activeAnchorId);
-      if (activeAnchor && activeAnchor.words.length > 0) {
-        let bestIndex = -1;
-        let bestScore = 0;
-        for (let i = 0; i < spanTexts.length; i += 1) {
-          const text = spanTexts[i];
-          if (!text.trim()) continue;
-          const sourceMatches = activeAnchor.words.filter((word) => text.includes(word)).length;
-          const summaryMatches = activeAnchor.summaryWords.filter((word) => text.includes(word)).length;
-          const score = sourceMatches * 3 + summaryMatches;
-          if (score > bestScore) {
-            bestScore = score;
-            bestIndex = i;
-          }
-        }
-        if (bestIndex >= 0 && bestScore > 0) {
-          const windowStart = Math.max(0, bestIndex - 8);
-          const windowEnd = Math.min(spanTexts.length - 1, bestIndex + 10);
-          for (let i = windowStart; i <= windowEnd; i += 1) {
-            const span = spans[i];
-            if (!span) continue;
-            span.classList.add('pdf-auto-highlight');
-          }
-          const focal = spans[bestIndex];
-          if (focal) {
-            focal.classList.remove('pdf-auto-highlight');
-            focal.classList.add('pdf-active-highlight');
-            highlightCount += Math.max(0, windowEnd - windowStart + 1);
-            activeCount += 1;
-          }
-        }
-      }
-    }
-
-    // Fallback broad mode for non-active states.
-    spans.forEach((span, idx) => {
-      const text = (span.textContent || '')
-        .toLowerCase()
-        .replace(/[^a-z0-9\s]/g, ' ');
-      if (!text.trim()) return;
-      if (activeAnchorId && span.classList.contains('pdf-auto-highlight')) return;
-      if (activeAnchorId && span.classList.contains('pdf-active-highlight')) return;
-      for (const anchor of anchorTokens) {
-        if (!anchor.words.length) continue;
-        const matched = anchor.words.some((word) => text.includes(word));
-        if (!matched) continue;
-        if (activeAnchorId && anchor.id === activeAnchorId) {
+      const phrase = normalizePhrase(activePageAnchors[0]?.snippet || focusSnippet || '');
+      const phraseWindow = findMatchingRange(spansJoined, phrase);
+      if (phraseWindow) {
+        for (let i = 0; i < spans.length; i += 1) {
+          const charRange = spanRanges[i];
+          const intersects = charRange.end >= phraseWindow.start && charRange.start <= phraseWindow.end;
+          if (!intersects) continue;
+          const span = spans[i];
           span.classList.add('pdf-active-highlight');
           if (span instanceof HTMLElement) {
             span.style.backgroundColor = 'rgba(59, 130, 246, 0.65)';
@@ -398,18 +461,11 @@ export function RequirementsPdfViewer({
           }
           highlightCount += 1;
           activeCount += 1;
-        } else {
-          // Keep non-active global highlighting subtle and sparse.
-          span.classList.add('pdf-auto-highlight');
-          if (span instanceof HTMLElement) {
-            span.style.backgroundColor = 'rgba(250, 204, 21, 0.55)';
-            span.style.borderRadius = '2px';
-          }
-          highlightCount += 1;
         }
-        break;
       }
-    });
+    }
+
+    // No broad fallback highlighting: only selected requirement should be highlighted.
     console.info('[PDF_DEBUG] highlights_applied', {
       activePage,
       spans: spans.length,
@@ -554,7 +610,9 @@ export function RequirementsPdfViewer({
                 Could not match the active snippet in this page text layer. Showing page jump + snippet context fallback.
               </div>
             ) : null}
-            <p className="text-xs text-gray-500">All mapped requirements for this page are highlighted automatically.</p>
+            <p className="text-xs text-gray-500">
+              {activeAnchorId ? 'Showing highlight for selected requirement.' : 'Select "View in document" to highlight only that requirement.'}
+            </p>
           </div>
         ) : (
           <div className="space-y-2">
