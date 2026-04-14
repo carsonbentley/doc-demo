@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { ArrowLeft, Settings, Upload } from 'lucide-react';
+import { ArrowLeft, ChevronDown, Settings, Upload } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -13,7 +13,6 @@ import { LoadingSpinner } from '@/components/ui/loading-spinner';
 import { RequirementsStepProgress } from '@/components/app/requirements-step-progress';
 import { RequirementsPdfViewer } from '@/components/app/requirements-pdf-viewer';
 import { RequirementsStatementsGroups } from '@/components/app/requirements-statements-groups';
-import { SowUploadPrimary } from '@/components/app/sow-upload-primary';
 import { type SectionLink } from '@/components/app/section-link-card';
 import {
   clearPendingRequirementsPayload,
@@ -804,7 +803,7 @@ export default function SowUploadPage() {
   );
 
   const requirementsListColumn = (
-    <div className="space-y-4">
+    <div className="min-h-0 min-w-0">
       {status?.latest_requirements_document_id ? (
         <RequirementsStatementsGroups
           groups={statementGroups}
@@ -824,11 +823,8 @@ export default function SowUploadPage() {
   );
 
   const viewerColumn = (
-    <div className="h-full">
+    <div className="flex h-full min-h-[min(65dvh,720px)] w-full min-w-0 flex-col lg:min-h-[calc(100dvh-14rem)]">
       <RequirementsPdfViewer
-        title={status?.latest_title}
-        sourceType={status?.latest_source_type}
-        sourceName={status?.latest_source_name}
         rawText={status?.latest_raw_text}
         pdfUrl={activeViewerPdfUrl}
         focusPage={viewerTarget?.page}
@@ -842,53 +838,33 @@ export default function SowUploadPage() {
     </div>
   );
 
-  const requirementsSourceCard = (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base font-semibold">Uploaded Requirements Document</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-2 text-sm text-gray-700">
-        <p>
-          <span className="font-medium text-gray-900">Title:</span> {status?.latest_title || 'Untitled'}
-        </p>
-        <p>
-          <span className="font-medium text-gray-900">Source Type:</span> {status?.latest_source_type || 'unknown'}
-        </p>
-        {status?.latest_source_name ? (
-          <p>
-            <span className="font-medium text-gray-900">Source:</span> {status.latest_source_name}
-          </p>
-        ) : null}
-        <p className="text-xs text-gray-500">
-          Use “View in document” on any requirement to jump to the related page and highlight context.
-        </p>
-      </CardContent>
-    </Card>
-  );
-
   const openSowSettings = () => {
     setSowSettingsDraftOverlapPct(Math.round(sowLinkSettings.overlapThreshold * 100));
     setSowSettingsDraftMaxCitations(sowLinkSettings.maxCitationsPerStatement);
     setSowSettingsOpen(true);
   };
 
-  const sowSourceUploadCard = (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
-        <CardTitle className="text-base font-semibold">Source Document</CardTitle>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="h-8 w-8 shrink-0 text-gray-600"
-          aria-label="Requirement linking settings"
-          title="Requirement Tracing Settings"
-          onClick={openSowSettings}
-        >
-          <Settings className="h-4 w-4" />
-        </Button>
-      </CardHeader>
-      <CardContent className="space-y-4">
+  const requirementsDocumentMeta = (
+    <div className="space-y-2 text-sm text-gray-700">
+      <p>
+        <span className="font-medium text-gray-900">Title:</span> {status?.latest_title || 'Untitled'}
+      </p>
+      <p>
+        <span className="font-medium text-gray-900">Source Type:</span> {status?.latest_source_type || 'unknown'}
+      </p>
+      {status?.latest_source_name ? (
+        <p>
+          <span className="font-medium text-gray-900">Source:</span> {status.latest_source_name}
+        </p>
+      ) : null}
+      <p className="text-xs text-gray-500">
+        Use “View in document” on any requirement to jump to the related page and highlight context.
+      </p>
+    </div>
+  );
+
+  const sowLinkUploadFields = (
+    <div className="space-y-4">
         <div className="flex items-center gap-2">
           <Button type="button" variant={workInputMode === 'text' ? 'default' : 'outline'} onClick={() => setWorkInputMode('text')}>
             Text
@@ -1002,8 +978,70 @@ export default function SowUploadPage() {
           <p className="text-xs text-amber-700">Requirements indexing has not completed yet.</p>
         ) : null}
         {uploadInfo ? <p className="text-xs text-green-700">{uploadInfo}</p> : null}
-      </CardContent>
+    </div>
+  );
+
+  const sowSourceUploadCard = (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
+        <CardTitle className="text-base font-semibold">Source Document</CardTitle>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 shrink-0 text-gray-600"
+          aria-label="Requirement linking settings"
+          title="Requirement Tracing Settings"
+          onClick={openSowSettings}
+        >
+          <Settings className="h-4 w-4" />
+        </Button>
+      </CardHeader>
+      <CardContent className="space-y-4">{sowLinkUploadFields}</CardContent>
     </Card>
+  );
+
+  const linkInternalDocsPanel = (
+    <details className="group rounded-lg border border-gray-200 bg-white shadow-sm open:shadow-md">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-2 px-3 py-2.5 text-sm font-medium text-gray-900 hover:bg-gray-50 sm:px-4 [&::-webkit-details-marker]:hidden">
+        <span className="flex min-w-0 items-center gap-2">
+          <ChevronDown
+            className="h-4 w-4 shrink-0 text-gray-500 transition-transform duration-200 group-open:rotate-180"
+            aria-hidden
+          />
+          <span>Link internal product documents</span>
+        </span>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="h-8 w-8 shrink-0 text-gray-600"
+          aria-label="Document link settings"
+          title="Document link settings"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            openSowSettings();
+          }}
+        >
+          <Settings className="h-4 w-4" />
+        </Button>
+      </summary>
+      <div className="border-t border-gray-100 px-3 py-4 sm:px-4">{sowLinkUploadFields}</div>
+    </details>
+  );
+
+  const requirementsDocumentPanel = (
+    <details className="group rounded-lg border border-gray-200 bg-white shadow-sm open:shadow-md">
+      <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2.5 text-sm font-medium text-gray-900 hover:bg-gray-50 sm:px-4 [&::-webkit-details-marker]:hidden">
+        <ChevronDown
+          className="h-4 w-4 shrink-0 text-gray-500 transition-transform duration-200 group-open:rotate-180"
+          aria-hidden
+        />
+        <span>Requirements document details</span>
+      </summary>
+      <div className="border-t border-gray-100 px-3 py-4 sm:px-4">{requirementsDocumentMeta}</div>
+    </details>
   );
 
   if (loading) {
@@ -1046,7 +1084,7 @@ export default function SowUploadPage() {
       </Dialog>
 
       {hasLinkedSections ? (
-        <div className="relative left-1/2 w-screen max-w-none -translate-x-1/2 min-h-[calc(100dvh-5.5rem)] bg-gray-50/90 pb-16">
+        <div className="min-h-[calc(100dvh-5.5rem)] w-full max-w-full overflow-x-hidden bg-gray-50/90 pb-16">
           <div className="sticky top-0 z-30 border-b border-gray-200 bg-white/95 px-4 py-3 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/85 sm:px-6 lg:px-8">
             <div className="mx-auto flex max-w-[1600px] flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="min-w-0">
@@ -1076,51 +1114,49 @@ export default function SowUploadPage() {
             </div>
           </div>
 
-          <div className="mx-auto max-w-[1600px] space-y-6 px-4 pt-6 sm:px-6 lg:px-8">
+          <div className="mx-auto max-w-[1600px] space-y-5 px-4 pt-5 sm:px-6 lg:px-8">
             {indexing || !status?.indexed ? stepProgress : null}
             {error ? <div className="rounded-md bg-red-50 p-3 text-sm text-red-700">{error}</div> : null}
+
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-3">
+              <div className="min-w-0 flex-1">{linkInternalDocsPanel}</div>
+              <div className="min-w-0 flex-1">{requirementsDocumentPanel}</div>
+            </div>
+
             {statementRowTotal > 0 ? (
-              <Card>
-                <CardHeader>
-                  <CardTitle className="text-base">Coverage overview</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="grid gap-3 sm:grid-cols-4">
-                    <div className="rounded-md border bg-white p-3">
-                      <p className="text-xs uppercase tracking-wide text-gray-500">Test coverage</p>
-                      <p className="text-2xl font-semibold text-gray-900">{coveragePct}%</p>
-                    </div>
-                    <div className="rounded-md border bg-white p-3">
-                      <p className="text-xs uppercase tracking-wide text-gray-500">Total requirements</p>
-                      <p className="text-2xl font-semibold text-gray-900">{statementRowTotal}</p>
-                    </div>
-                    <div className="rounded-md border bg-emerald-50 p-3">
-                      <p className="text-xs uppercase tracking-wide text-emerald-700">Linked requirements</p>
-                      <p className="text-2xl font-semibold text-emerald-900">{linkedRequirementCount}</p>
-                    </div>
-                    <div className="rounded-md border bg-red-50 p-3">
-                      <p className="text-xs uppercase tracking-wide text-red-700">Missed requirements</p>
-                      <p className="text-2xl font-semibold text-red-800">{missedRequirementCount}</p>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
+              <div className="flex flex-wrap items-baseline gap-x-8 gap-y-2 rounded-lg border border-gray-200 bg-white px-4 py-3 text-sm shadow-sm">
+                <div>
+                  <span className="text-gray-500">Test coverage </span>
+                  <span className="text-lg font-semibold tabular-nums text-gray-900">{coveragePct}%</span>
+                </div>
+                <div>
+                  <span className="text-gray-500">Total </span>
+                  <span className="font-semibold tabular-nums text-gray-900">{statementRowTotal}</span>
+                </div>
+                <div>
+                  <span className="text-emerald-700">Linked </span>
+                  <span className="font-semibold tabular-nums text-emerald-900">{linkedRequirementCount}</span>
+                </div>
+                <div>
+                  <span className="text-red-700">Missed </span>
+                  <span className="font-semibold tabular-nums text-red-800">{missedRequirementCount}</span>
+                </div>
+              </div>
             ) : null}
-            <div className="grid gap-6 lg:grid-cols-2">
-              <div className="min-w-0">{sowSourceUploadCard}</div>
-              <div className="min-w-0">{requirementsSourceCard}</div>
+
+            <div className="grid min-h-0 grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1.72fr)_minmax(0,1fr)] lg:items-start lg:gap-6">
+              <div className="min-w-0">{viewerColumn}</div>
+              <div className="min-h-0 min-w-0 lg:max-h-[calc(100dvh-14rem)] lg:overflow-y-auto lg:overflow-x-hidden lg:pr-1">
+                {requirementsListColumn}
+              </div>
             </div>
-            <div className="grid gap-6 lg:grid-cols-2">
-              <div className="min-w-0 lg:sticky lg:top-[5.75rem] lg:h-[calc(100dvh-7rem)]">{viewerColumn}</div>
-              <div className="min-w-0">{requirementsListColumn}</div>
-            </div>
-            <p className="border-t border-gray-200 pt-6 text-sm text-gray-500">
+            <p className="border-t border-gray-200 pt-5 text-sm text-gray-500">
               Links are saved automatically. Open <span className="font-medium">View History</span> to browse past document uploads.
             </p>
           </div>
         </div>
       ) : (
-        <div className="space-y-6">
+        <div className="w-full max-w-full space-y-5 overflow-x-hidden px-4 pb-10 sm:px-6">
           <div className="flex items-center justify-between">
             <div>
               <Button variant="ghost" onClick={() => router.push(`/app/organizations/${organizationId}/requirements`)} className="mb-2">
@@ -1138,16 +1174,16 @@ export default function SowUploadPage() {
           {stepProgress}
           {error ? <div className="rounded-md bg-red-50 p-3 text-sm text-red-700">{error}</div> : null}
 
-          <div className="grid gap-6 lg:grid-cols-2">
-            <div className="space-y-4">
-              <SowUploadPrimary hasSow={false} />
-              {sowSourceUploadCard}
-            </div>
-            <div className="space-y-4">{requirementsSourceCard}</div>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-3">
+            <div className="min-w-0 flex-1">{linkInternalDocsPanel}</div>
+            <div className="min-w-0 flex-1">{requirementsDocumentPanel}</div>
           </div>
-          <div className="grid gap-6 lg:grid-cols-2">
-            <div className="min-w-0 lg:sticky lg:top-[5.75rem] lg:h-[calc(100dvh-7rem)]">{viewerColumn}</div>
-            <div className="min-w-0">{requirementsListColumn}</div>
+
+          <div className="grid min-h-0 grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1.72fr)_minmax(0,1fr)] lg:items-start lg:gap-6">
+            <div className="min-w-0">{viewerColumn}</div>
+            <div className="min-h-0 min-w-0 lg:max-h-[calc(100dvh-14rem)] lg:overflow-y-auto lg:overflow-x-hidden lg:pr-1">
+              {requirementsListColumn}
+            </div>
           </div>
         </div>
       )}

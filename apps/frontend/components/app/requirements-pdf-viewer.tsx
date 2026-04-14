@@ -20,9 +20,6 @@ type CitationContext = {
 };
 
 type RequirementsPdfViewerProps = {
-  title?: string | null;
-  sourceType?: string | null;
-  sourceName?: string | null;
   rawText?: string | null;
   pdfUrl?: string | null;
   focusPage?: number | null;
@@ -156,9 +153,6 @@ function findMatchingRange(joined: string, phrase: string): TextRange | null {
 }
 
 export function RequirementsPdfViewer({
-  title,
-  sourceType,
-  sourceName,
   rawText,
   pdfUrl,
   focusPage,
@@ -170,7 +164,8 @@ export function RequirementsPdfViewer({
   ocrWordBoxes,
 }: RequirementsPdfViewerProps) {
   const viewerRef = useRef<HTMLDivElement | null>(null);
-  const PAGE_RENDER_WIDTH = 760;
+  const widthMeasureRef = useRef<HTMLDivElement | null>(null);
+  const [renderWidth, setRenderWidth] = useState(720);
   const [pageNumber, setPageNumber] = useState<number>(1);
   const [numPages, setNumPages] = useState<number>(1);
   const [pageInput, setPageInput] = useState<string>('1');
@@ -184,6 +179,17 @@ export function RequirementsPdfViewer({
     1,
     Math.min(followFocus ? (focusPage || resolvedFocusPage || pageNumber) : pageNumber, numPages)
   );
+
+  useEffect(() => {
+    const el = widthMeasureRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width;
+      if (w >= 200) setRenderWidth(Math.floor(w));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [pdfUrl]);
 
   useEffect(() => {
     const originalError = console.error;
@@ -323,7 +329,7 @@ export function RequirementsPdfViewer({
       try {
         const page = await pdfDoc.getPage(activePage);
         const viewport = page.getViewport({ scale: 1 });
-        const scale = PAGE_RENDER_WIDTH / viewport.width;
+        const scale = renderWidth / viewport.width;
         const scaledViewport = page.getViewport({ scale });
         const textContent = await page.getTextContent();
         const items = textContent.items || [];
@@ -385,9 +391,9 @@ export function RequirementsPdfViewer({
             );
             if (!intersects) continue;
             wordRects.push({
-              left: Number(wordBox.x || 0) * PAGE_RENDER_WIDTH,
+              left: Number(wordBox.x || 0) * renderWidth,
               top: Number(wordBox.y || 0) * scaledViewport.height,
-              width: Math.max(4, Number(wordBox.width || 0) * PAGE_RENDER_WIDTH),
+              width: Math.max(4, Number(wordBox.width || 0) * renderWidth),
               height: Math.max(6, Number(wordBox.height || 0) * scaledViewport.height),
               isActive: true,
             });
@@ -424,7 +430,7 @@ export function RequirementsPdfViewer({
     return () => {
       cancelled = true;
     };
-  }, [pdfDoc, activePage, activeAnchorId, activePageAnchors, focusSnippet, ocrWordBoxes]);
+  }, [pdfDoc, activePage, activeAnchorId, activePageAnchors, focusSnippet, ocrWordBoxes, renderWidth]);
 
   const applyTextLayerHighlights = () => {
     const root = viewerRef.current;
@@ -438,6 +444,10 @@ export function RequirementsPdfViewer({
         span.style.backgroundColor = '';
         span.style.outline = '';
         span.style.borderRadius = '';
+        span.style.textDecoration = '';
+        span.style.textDecorationLine = '';
+        span.style.textDecorationColor = '';
+        span.style.textDecorationThickness = '';
       }
     });
     const spanTexts = Array.from(spans).map((span) => ((span.textContent || '') as string));
@@ -454,11 +464,6 @@ export function RequirementsPdfViewer({
           if (!intersects) continue;
           const span = spans[i];
           span.classList.add('pdf-active-highlight');
-          if (span instanceof HTMLElement) {
-            span.style.backgroundColor = 'rgba(59, 130, 246, 0.65)';
-            span.style.outline = '1px solid rgba(59, 130, 246, 0.9)';
-            span.style.borderRadius = '2px';
-          }
           highlightCount += 1;
           activeCount += 1;
         }
@@ -487,25 +492,11 @@ export function RequirementsPdfViewer({
   };
 
   return (
-    <Card className="h-full">
-      <CardHeader>
-        <CardTitle className="text-base">Requirements Document Viewer</CardTitle>
+    <Card className="flex h-full min-h-0 flex-col">
+      <CardHeader className="shrink-0 space-y-0 py-3">
+        <CardTitle className="text-sm font-semibold text-gray-900">Document</CardTitle>
       </CardHeader>
-      <CardContent className="flex h-[calc(100dvh-14rem)] flex-col gap-3">
-        <div className="text-sm text-gray-600">
-          <p>
-            <span className="font-medium text-gray-800">Title:</span> {title || 'Untitled'}
-          </p>
-          <p>
-            <span className="font-medium text-gray-800">Source Type:</span> {sourceType || 'unknown'}
-          </p>
-          {sourceName ? (
-            <p>
-              <span className="font-medium text-gray-800">Source:</span> {sourceName}
-            </p>
-          ) : null}
-        </div>
-
+      <CardContent className="flex min-h-0 flex-1 flex-col gap-2 px-3 pb-3 pt-0 sm:px-4 sm:pb-4">
         {focusSnippet ? (
           <div className="rounded-md border border-blue-200 bg-blue-50 p-2 text-xs text-blue-900">
             <p className="font-semibold">{focusLabel || 'Focused requirement'}</p>
@@ -562,7 +553,7 @@ export function RequirementsPdfViewer({
               </Button>
             </div>
 
-            <div ref={viewerRef} className="min-h-0 flex-1 overflow-auto rounded-md border bg-white p-2">
+            <div ref={viewerRef} className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto rounded-md border bg-white p-2">
               <Document
                 file={pdfUrl}
                 onLoadSuccess={(doc) => {
@@ -572,11 +563,11 @@ export function RequirementsPdfViewer({
                   setPageNumber((prev) => Math.max(1, Math.min(prev, loadedNumPages)));
                 }}
               >
-                <div className="relative" style={{ width: PAGE_RENDER_WIDTH, minHeight: overlayHeight }}>
+                <div ref={widthMeasureRef} className="relative w-full min-w-0" style={{ minHeight: overlayHeight }}>
                   <Page
-                    key={`page-${activePage}-${activeAnchorId || 'none'}`}
+                    key={`page-${activePage}-${activeAnchorId || 'none'}-${renderWidth}`}
                     pageNumber={activePage}
-                    width={PAGE_RENDER_WIDTH}
+                    width={renderWidth}
                     renderTextLayer
                     renderAnnotationLayer
                     onRenderTextLayerSuccess={applyTextLayerHighlights}
@@ -589,9 +580,8 @@ export function RequirementsPdfViewer({
                   <div className="pointer-events-none absolute inset-0">
                     {overlayRects.map((rect, idx) => (
                       <div
-                        // eslint-disable-next-line react/no-array-index-key
                         key={`overlay-${idx}`}
-                        className={rect.isActive ? 'pdf-overlay-active' : 'pdf-overlay-auto'}
+                        className={rect.isActive ? 'pdf-overlay-highlight-active' : 'pdf-overlay-highlight'}
                         style={{
                           position: 'absolute',
                           left: `${rect.left}px`,
@@ -627,24 +617,28 @@ export function RequirementsPdfViewer({
         )}
       </CardContent>
       <style jsx global>{`
-        .pdf-auto-highlight {
-          background: rgba(250, 204, 21, 0.55) !important;
-          border-radius: 2px;
-        }
+        /* Light translucent yellow — reads like a physical highlighter, full span/word height */
+        .pdf-auto-highlight,
         .pdf-active-highlight {
-          background: rgba(59, 130, 246, 0.65) !important;
-          border-radius: 2px;
-          outline: 1px solid rgba(59, 130, 246, 0.9);
-          color: #0f172a !important;
+          background: rgba(254, 240, 138, 0.52) !important;
+          outline: none !important;
+          box-shadow: none !important;
+          color: inherit !important;
+          border-radius: 2px !important;
+          box-decoration-break: clone !important;
+          -webkit-box-decoration-break: clone !important;
         }
-        .pdf-overlay-auto {
-          background: rgba(250, 204, 21, 0.35);
+        .pdf-overlay-highlight,
+        .pdf-overlay-highlight-active {
+          background: rgba(254, 240, 138, 0.48);
           border-radius: 2px;
+          mix-blend-mode: multiply;
         }
-        .pdf-overlay-active {
-          background: rgba(59, 130, 246, 0.45);
-          outline: 1px solid rgba(59, 130, 246, 0.9);
-          border-radius: 2px;
+        .pdf-overlay-highlight {
+          opacity: 0.92;
+        }
+        .pdf-overlay-highlight-active {
+          opacity: 1;
         }
       `}</style>
     </Card>
