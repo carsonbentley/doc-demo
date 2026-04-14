@@ -29,8 +29,20 @@ type RequirementsPdfViewerProps = {
   focusSnippet?: string | null;
   focusLabel?: string | null;
   linkedCitations?: CitationContext[];
-  highlightAnchors?: Array<{ page?: number | null; snippet?: string | null; id: string }>;
+  highlightAnchors?: Array<{ page?: number | null; snippet?: string | null; summary?: string | null; id: string }>;
   activeAnchorId?: string | null;
+  ocrWordBoxes?: Array<{
+    page_number: number;
+    words: Array<{ text: string; x: number; y: number; width: number; height: number }>;
+  }>;
+};
+
+type OverlayRect = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  isActive: boolean;
 };
 
 function normalizeSnippet(snippet?: string | null): string[] {
@@ -55,14 +67,19 @@ export function RequirementsPdfViewer({
   linkedCitations,
   highlightAnchors,
   activeAnchorId,
+  ocrWordBoxes,
 }: RequirementsPdfViewerProps) {
   const viewerRef = useRef<HTMLDivElement | null>(null);
+  const PAGE_RENDER_WIDTH = 760;
   const [pageNumber, setPageNumber] = useState<number>(1);
   const [numPages, setNumPages] = useState<number>(1);
   const [pageInput, setPageInput] = useState<string>('1');
   const [followFocus, setFollowFocus] = useState<boolean>(true);
   const [resolvedFocusPage, setResolvedFocusPage] = useState<number | null>(null);
   const [bestResolvedScore, setBestResolvedScore] = useState<number>(0);
+  const [pdfDoc, setPdfDoc] = useState<pdfjs.PDFDocumentProxy | null>(null);
+  const [overlayRects, setOverlayRects] = useState<OverlayRect[]>([]);
+  const [overlayHeight, setOverlayHeight] = useState<number>(900);
   const activePage = Math.max(
     1,
     Math.min(followFocus ? (focusPage || resolvedFocusPage || pageNumber) : pageNumber, numPages)
@@ -93,6 +110,20 @@ export function RequirementsPdfViewer({
     if (!focusSnippet) return;
     setFollowFocus(true);
   }, [focusSnippet, activeAnchorId]);
+
+  useEffect(() => {
+    // Always honor a fresh requirement focus click, even after manual page navigation.
+    if (!activeAnchorId) return;
+    setFollowFocus(true);
+    if (focusPage) {
+      setResolvedFocusPage(null);
+      setPageNumber(focusPage);
+      setPageInput(String(focusPage));
+    } else if (resolvedFocusPage) {
+      setPageNumber(resolvedFocusPage);
+      setPageInput(String(resolvedFocusPage));
+    }
+  }, [activeAnchorId, focusPage, resolvedFocusPage]);
 
   useEffect(() => {
     let cancelled = false;
@@ -160,6 +191,7 @@ export function RequirementsPdfViewer({
     return pageAnchors.map((anchor) => ({
       id: anchor.id,
       words: normalizeSnippet(anchor.snippet),
+      summaryWords: normalizeSnippet(anchor.summary).slice(0, 8),
     }));
   }, [pageAnchors]);
 
@@ -179,6 +211,118 @@ export function RequirementsPdfViewer({
     setPageNumber(next);
   };
 
+  useEffect(() => {
+    let cancelled = false;
+    const computeOverlayRects = async () => {
+      if (!pdfDoc) return;
+      try {
+        const page = await pdfDoc.getPage(activePage);
+        const viewport = page.getViewport({ scale: 1 });
+        const scale = PAGE_RENDER_WIDTH / viewport.width;
+        const scaledViewport = page.getViewport({ scale });
+        const textContent = await page.getTextContent();
+        const items = textContent.items || [];
+
+        const nextRects: OverlayRect[] = [];
+        for (const item of items) {
+          if (!('str' in item)) continue;
+          const str = String(item.str || '');
+          const normalized = str.toLowerCase().replace(/[^a-z0-9\s]/g, ' ');
+          if (!normalized.trim()) continue;
+
+          let matchedAnchorId: string | null = null;
+          for (const anchor of anchorTokens) {
+            const matched = anchor.words.some((word) => normalized.includes(word));
+            if (matched) {
+              matchedAnchorId = anchor.id;
+              break;
+            }
+          }
+          if (!matchedAnchorId) continue;
+
+          const rawTransform = item.transform || [1, 0, 0, 1, 0, 0];
+          // Convert text item transform into viewport coordinates.
+          const tx = pdfjs.Util.transform(scaledViewport.transform, rawTransform);
+          const x = Number(tx[4] || 0);
+          const y = Number(tx[5] || 0);
+          const width = Math.max(8, Number(item.width || 0) * scale);
+          const height = Math.max(8, Math.abs(Number(tx[3] || tx[0] || 10)));
+          const top = y - height;
+          const left = x;
+          const inBounds =
+            left + width >= 0 &&
+            top + height >= 0 &&
+            left <= scaledViewport.width &&
+            top <= scaledViewport.height;
+          if (!inBounds) continue;
+
+          nextRects.push({
+            left,
+            top,
+            width,
+            height,
+            isActive: Boolean(activeAnchorId && matchedAnchorId === activeAnchorId),
+          });
+        }
+
+        if (nextRects.length === 0) {
+          const wordsForPage =
+            (ocrWordBoxes || []).find((entry) => entry.page_number === activePage)?.words || [];
+          const wordRects: OverlayRect[] = [];
+          for (const wordBox of wordsForPage) {
+            const normalizedWord = String(wordBox.text || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+            if (!normalizedWord) continue;
+            let matchedAnchorId: string | null = null;
+            for (const anchor of anchorTokens) {
+              const tokenSet = new Set([...anchor.words, ...anchor.summaryWords].map((w) => w.replace(/[^a-z0-9]/g, '')));
+              if (tokenSet.has(normalizedWord)) {
+                matchedAnchorId = anchor.id;
+                break;
+              }
+            }
+            if (!matchedAnchorId) continue;
+            wordRects.push({
+              left: Number(wordBox.x || 0) * PAGE_RENDER_WIDTH,
+              top: Number(wordBox.y || 0) * scaledViewport.height,
+              width: Math.max(4, Number(wordBox.width || 0) * PAGE_RENDER_WIDTH),
+              height: Math.max(6, Number(wordBox.height || 0) * scaledViewport.height),
+              isActive: Boolean(activeAnchorId && matchedAnchorId === activeAnchorId),
+            });
+          }
+          nextRects.push(...wordRects);
+          console.info('[PDF_DEBUG] ocr_word_overlay_used', {
+            activePage,
+            ocrWords: wordsForPage.length,
+            rects: wordRects.length,
+          });
+        }
+
+        if (!cancelled) {
+          setOverlayRects(nextRects);
+          setOverlayHeight(scaledViewport.height);
+          console.info('[PDF_DEBUG] overlay_rects_computed', {
+            activePage,
+            textItems: items.length,
+            rects: nextRects.length,
+            activeRects: nextRects.filter((rect) => rect.isActive).length,
+            viewport: { width: scaledViewport.width, height: scaledViewport.height },
+            sampleRect: nextRects[0] || null,
+          });
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setOverlayRects([]);
+          console.warn('[PDF_DEBUG] overlay_rects_error', String((error as Error)?.message || error));
+        }
+      }
+    };
+
+    void computeOverlayRects();
+    return () => {
+      cancelled = true;
+    };
+  }, [pdfDoc, activePage, activeAnchorId, anchorTokens]);
+
   const applyTextLayerHighlights = () => {
     const root = viewerRef.current;
     if (!root) return;
@@ -187,22 +331,80 @@ export function RequirementsPdfViewer({
     let activeCount = 0;
     spans.forEach((span) => {
       span.classList.remove('pdf-auto-highlight', 'pdf-active-highlight');
+      if (span instanceof HTMLElement) {
+        span.style.backgroundColor = '';
+        span.style.outline = '';
+        span.style.borderRadius = '';
+      }
     });
-    spans.forEach((span) => {
+    const spanTexts = Array.from(spans).map((span) =>
+      ((span.textContent || '') as string).toLowerCase().replace(/[^a-z0-9\s]/g, ' ')
+    );
+
+    // Active mode: highlight the most likely phrase neighborhood.
+    if (activeAnchorId) {
+      const activeAnchor = anchorTokens.find((a) => a.id === activeAnchorId);
+      if (activeAnchor && activeAnchor.words.length > 0) {
+        let bestIndex = -1;
+        let bestScore = 0;
+        for (let i = 0; i < spanTexts.length; i += 1) {
+          const text = spanTexts[i];
+          if (!text.trim()) continue;
+          const sourceMatches = activeAnchor.words.filter((word) => text.includes(word)).length;
+          const summaryMatches = activeAnchor.summaryWords.filter((word) => text.includes(word)).length;
+          const score = sourceMatches * 3 + summaryMatches;
+          if (score > bestScore) {
+            bestScore = score;
+            bestIndex = i;
+          }
+        }
+        if (bestIndex >= 0 && bestScore > 0) {
+          const windowStart = Math.max(0, bestIndex - 8);
+          const windowEnd = Math.min(spanTexts.length - 1, bestIndex + 10);
+          for (let i = windowStart; i <= windowEnd; i += 1) {
+            const span = spans[i];
+            if (!span) continue;
+            span.classList.add('pdf-auto-highlight');
+          }
+          const focal = spans[bestIndex];
+          if (focal) {
+            focal.classList.remove('pdf-auto-highlight');
+            focal.classList.add('pdf-active-highlight');
+            highlightCount += Math.max(0, windowEnd - windowStart + 1);
+            activeCount += 1;
+          }
+        }
+      }
+    }
+
+    // Fallback broad mode for non-active states.
+    spans.forEach((span, idx) => {
       const text = (span.textContent || '')
         .toLowerCase()
         .replace(/[^a-z0-9\s]/g, ' ');
       if (!text.trim()) return;
+      if (activeAnchorId && span.classList.contains('pdf-auto-highlight')) return;
+      if (activeAnchorId && span.classList.contains('pdf-active-highlight')) return;
       for (const anchor of anchorTokens) {
         if (!anchor.words.length) continue;
         const matched = anchor.words.some((word) => text.includes(word));
         if (!matched) continue;
         if (activeAnchorId && anchor.id === activeAnchorId) {
           span.classList.add('pdf-active-highlight');
+          if (span instanceof HTMLElement) {
+            span.style.backgroundColor = 'rgba(59, 130, 246, 0.65)';
+            span.style.outline = '1px solid rgba(59, 130, 246, 0.9)';
+            span.style.borderRadius = '2px';
+          }
           highlightCount += 1;
           activeCount += 1;
         } else {
+          // Keep non-active global highlighting subtle and sparse.
           span.classList.add('pdf-auto-highlight');
+          if (span instanceof HTMLElement) {
+            span.style.backgroundColor = 'rgba(250, 204, 21, 0.55)';
+            span.style.borderRadius = '2px';
+          }
           highlightCount += 1;
         }
         break;
@@ -307,24 +509,44 @@ export function RequirementsPdfViewer({
             <div ref={viewerRef} className="min-h-0 flex-1 overflow-auto rounded-md border bg-white p-2">
               <Document
                 file={pdfUrl}
-                onLoadSuccess={({ numPages: loadedNumPages }) => {
+                onLoadSuccess={(doc) => {
+                  setPdfDoc(doc);
+                  const loadedNumPages = doc.numPages;
                   setNumPages(loadedNumPages);
                   setPageNumber((prev) => Math.max(1, Math.min(prev, loadedNumPages)));
                 }}
               >
-                <Page
-                  key={`page-${activePage}-${activeAnchorId || 'none'}`}
-                  pageNumber={activePage}
-                  width={760}
-                  renderTextLayer
-                  renderAnnotationLayer
-                  onRenderTextLayerSuccess={applyTextLayerHighlights}
-                  onRenderTextLayerError={(error) => {
-                    const message = String((error as Error)?.message || '');
-                    if (message.toLowerCase().includes('textlayer task cancelled')) return;
-                    console.error(error);
-                  }}
-                />
+                <div className="relative" style={{ width: PAGE_RENDER_WIDTH, minHeight: overlayHeight }}>
+                  <Page
+                    key={`page-${activePage}-${activeAnchorId || 'none'}`}
+                    pageNumber={activePage}
+                    width={PAGE_RENDER_WIDTH}
+                    renderTextLayer
+                    renderAnnotationLayer
+                    onRenderTextLayerSuccess={applyTextLayerHighlights}
+                    onRenderTextLayerError={(error) => {
+                      const message = String((error as Error)?.message || '');
+                      if (message.toLowerCase().includes('textlayer task cancelled')) return;
+                      console.error(error);
+                    }}
+                  />
+                  <div className="pointer-events-none absolute inset-0">
+                    {overlayRects.map((rect, idx) => (
+                      <div
+                        // eslint-disable-next-line react/no-array-index-key
+                        key={`overlay-${idx}`}
+                        className={rect.isActive ? 'pdf-overlay-active' : 'pdf-overlay-auto'}
+                        style={{
+                          position: 'absolute',
+                          left: `${rect.left}px`,
+                          top: `${rect.top}px`,
+                          width: `${rect.width}px`,
+                          height: `${rect.height}px`,
+                        }}
+                      />
+                    ))}
+                  </div>
+                </div>
               </Document>
             </div>
             {!hasActiveMatchOnPage && focusSnippet ? (
@@ -348,13 +570,23 @@ export function RequirementsPdfViewer({
       </CardContent>
       <style jsx global>{`
         .pdf-auto-highlight {
-          background: rgba(250, 204, 21, 0.35);
+          background: rgba(250, 204, 21, 0.55) !important;
           border-radius: 2px;
         }
         .pdf-active-highlight {
-          background: rgba(59, 130, 246, 0.35);
+          background: rgba(59, 130, 246, 0.65) !important;
           border-radius: 2px;
-          outline: 1px solid rgba(59, 130, 246, 0.5);
+          outline: 1px solid rgba(59, 130, 246, 0.9);
+          color: #0f172a !important;
+        }
+        .pdf-overlay-auto {
+          background: rgba(250, 204, 21, 0.35);
+          border-radius: 2px;
+        }
+        .pdf-overlay-active {
+          background: rgba(59, 130, 246, 0.45);
+          outline: 1px solid rgba(59, 130, 246, 0.9);
+          border-radius: 2px;
         }
       `}</style>
     </Card>

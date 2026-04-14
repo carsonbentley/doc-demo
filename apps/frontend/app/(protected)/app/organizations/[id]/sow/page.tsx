@@ -45,6 +45,10 @@ type RequirementsStatus = {
   latest_source_name: string | null;
   latest_raw_text: string | null;
   latest_source_pdf_url?: string | null;
+  latest_page_word_boxes?: Array<{
+    page_number: number;
+    words: Array<{ text: string; x: number; y: number; width: number; height: number }>;
+  }>;
   chunk_count: number;
   chunk_total?: number;
   statement_count?: number;
@@ -117,6 +121,10 @@ type RequirementsDocRow = {
     statement_count?: number;
     statement_candidates_total?: number;
     source_pdf_url?: string;
+    page_word_boxes?: Array<{
+      page_number: number;
+      words: Array<{ text: string; x: number; y: number; width: number; height: number }>;
+    }>;
   } | null;
   created_at?: string;
 };
@@ -277,6 +285,7 @@ export default function SowUploadPage() {
           latest_source_type: null,
           latest_source_name: null,
           latest_source_pdf_url: null,
+          latest_page_word_boxes: [],
           latest_raw_text: null,
           chunk_count: 0,
         });
@@ -329,6 +338,7 @@ export default function SowUploadPage() {
         latest_source_type: preferredDoc.source_type,
         latest_source_name: preferredDoc.source_name,
         latest_source_pdf_url: preferredDoc.source_pdf_url || preferredDoc.metadata?.source_pdf_url || null,
+        latest_page_word_boxes: preferredDoc.metadata?.page_word_boxes || [],
         latest_raw_text: preferredDoc.raw_text,
         chunk_count: chunkCount,
         chunk_total: chunkTotal,
@@ -787,6 +797,7 @@ export default function SowUploadPage() {
           id: statement.id,
           page: statement.source_page ?? null,
           snippet: statement.text_anchor?.snippet || statement.source_quote || statement.statement_text,
+          summary: statement.requirement_summary || statement.distilled_text || statement.statement_text,
         }))
       ),
     [statementGroups]
@@ -826,6 +837,7 @@ export default function SowUploadPage() {
         linkedCitations={focusedStatementCitations}
         highlightAnchors={viewerTarget?.documentType === 'requirements' || !viewerTarget ? requirementHighlightAnchors : []}
         activeAnchorId={viewerTarget?.statementId || null}
+        ocrWordBoxes={status?.latest_page_word_boxes || []}
       />
     </div>
   );

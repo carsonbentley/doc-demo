@@ -436,6 +436,62 @@ def _preprocess_image_for_ocr(page: fitz.Page) -> np.ndarray:
     return thresh
 
 
+def _extract_page_word_boxes(page: fitz.Page, ocr_image: np.ndarray | None = None) -> List[Dict[str, Any]]:
+    words: List[Dict[str, Any]] = []
+    page_rect = page.rect
+    page_width = float(page_rect.width or 1.0)
+    page_height = float(page_rect.height or 1.0)
+
+    if ocr_image is not None:
+        try:
+            data = pytesseract.image_to_data(
+                ocr_image,
+                config=OCR_CONFIG,
+                output_type=pytesseract.Output.DICT,
+                timeout=OCR_TIMEOUT_SECONDS,
+            )
+            img_h, img_w = ocr_image.shape[:2]
+            img_w = max(img_w, 1)
+            img_h = max(img_h, 1)
+            for i in range(len(data.get("text", []))):
+                text = (data["text"][i] or "").strip()
+                if not text:
+                    continue
+                conf = str(data.get("conf", ["-1"])[i] or "-1")
+                try:
+                    conf_val = float(conf)
+                except Exception:
+                    conf_val = -1.0
+                if conf_val < 40:
+                    continue
+                x = float(data["left"][i]) / float(img_w)
+                y = float(data["top"][i]) / float(img_h)
+                w = float(data["width"][i]) / float(img_w)
+                h = float(data["height"][i]) / float(img_h)
+                words.append({"text": text, "x": x, "y": y, "width": w, "height": h})
+            if words:
+                return words
+        except Exception:
+            pass
+
+    try:
+        for row in page.get_text("words"):
+            if len(row) < 5:
+                continue
+            x0, y0, x1, y1, text = row[:5]
+            token = str(text or "").strip()
+            if not token:
+                continue
+            x = float(x0) / page_width
+            y = float(y0) / page_height
+            w = max(0.0, float(x1) - float(x0)) / page_width
+            h = max(0.0, float(y1) - float(y0)) / page_height
+            words.append({"text": token, "x": x, "y": y, "width": w, "height": h})
+    except Exception:
+        return []
+    return words
+
+
 def _extract_pdf_text_with_hybrid_ocr(file_bytes: bytes) -> Dict[str, Any]:
     try:
         document = fitz.open(stream=file_bytes, filetype="pdf")
@@ -446,6 +502,7 @@ def _extract_pdf_text_with_hybrid_ocr(file_bytes: bytes) -> Dict[str, Any]:
     page_count = document.page_count
     ocr_pages = 0
     warnings: Set[str] = set()
+    page_word_boxes: List[Dict[str, Any]] = []
 
     for idx in range(page_count):
         page = document[idx]
@@ -454,10 +511,12 @@ def _extract_pdf_text_with_hybrid_ocr(file_bytes: bytes) -> Dict[str, Any]:
         normalized_direct = _normalize_whitespace(direct_text)
         page_text = direct_text
         used_ocr = False
+        processed_for_ocr: np.ndarray | None = None
 
         if len(normalized_direct) < PDF_TEXT_THRESHOLD:
             try:
                 processed = _preprocess_image_for_ocr(page)
+                processed_for_ocr = processed
                 ocr_text = pytesseract.image_to_string(
                     processed,
                     config=OCR_CONFIG,
@@ -484,6 +543,12 @@ def _extract_pdf_text_with_hybrid_ocr(file_bytes: bytes) -> Dict[str, Any]:
 
         if structured_page_text:
             pages_output.append({"page_number": page_number, "text": structured_page_text})
+        page_word_boxes.append(
+            {
+                "page_number": page_number,
+                "words": _extract_page_word_boxes(page, ocr_image=processed_for_ocr)[:3000],
+            }
+        )
         if used_ocr:
             ocr_pages += 1
 
@@ -511,6 +576,7 @@ def _extract_pdf_text_with_hybrid_ocr(file_bytes: bytes) -> Dict[str, Any]:
         "ocr_pages": ocr_pages,
         "warnings": sorted(warnings),
         "page_spans": page_spans,
+        "page_word_boxes": page_word_boxes,
     }
 
 
@@ -1376,6 +1442,7 @@ def _persist_requirements_from_text(
     ocr_pages: int | None = None,
     extraction_warnings: List[str] | None = None,
     page_spans: List[Dict[str, int]] | None = None,
+    page_word_boxes: List[Dict[str, Any]] | None = None,
     source_pdf_upload: Dict[str, Any] | None = None,
 ) -> IngestRequirementsResponse:
     if not request.raw_text.strip():
@@ -1391,6 +1458,8 @@ def _persist_requirements_from_text(
             document_metadata["extraction_warnings"] = extraction_warnings
         if page_spans:
             document_metadata["page_spans"] = page_spans
+        if page_word_boxes:
+            document_metadata["page_word_boxes"] = page_word_boxes
         document_metadata["processing_status"] = "indexing"
         doc_result = supabase.table("requirements_documents").insert(
             {
@@ -1765,6 +1834,7 @@ async def ingest_requirements_pdf(
         ocr_pages=extracted["ocr_pages"],
         extraction_warnings=extracted["warnings"],
         page_spans=extracted.get("page_spans") or [],
+        page_word_boxes=extracted.get("page_word_boxes") or [],
         source_pdf_upload={"filename": file.filename, "bytes": file_bytes},
     )
 
