@@ -60,6 +60,7 @@ export function RequirementsStepProgress({
   const hasTotals = (chunkTotal ?? 0) > 0 || (statementCandidatesTotal ?? 0) > 0;
   const showIndeterminate = indexing && !indexed && !hasTotals;
   const showBar = indexing && !indexed;
+  const showProgressTrack = showBar && !showIndeterminate;
 
   const ariaLabel = useMemo(() => {
     if (!showBar) return undefined;
@@ -113,24 +114,21 @@ export function RequirementsStepProgress({
       {showBar ? (
         <div className="mt-3 space-y-2">
           <p className="text-xs text-blue-700">{indexingLabel || 'Indexing requirements document...'}</p>
-          <div
-            className="relative h-2.5 w-full overflow-hidden rounded-full bg-slate-200"
-            role="progressbar"
-            {...(showIndeterminate
-              ? {}
-              : { 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-valuenow': percent })}
-            aria-busy={showIndeterminate}
-            aria-label={ariaLabel}
-          >
-            {showIndeterminate ? (
-              <div className="absolute inset-y-0 left-0 w-1/3 rounded-full bg-gradient-to-r from-blue-500 to-indigo-500 motion-safe:animate-req-progress-shimmer" />
-            ) : (
+          {showProgressTrack ? (
+            <div
+              className="relative h-2.5 w-full overflow-hidden rounded-full bg-slate-200"
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={percent}
+              aria-label={ariaLabel}
+            >
               <div
                 className="h-full rounded-full bg-gradient-to-r from-blue-500 to-indigo-600 transition-[width] duration-500 ease-out"
                 style={{ width: `${percent}%` }}
               />
-            )}
-          </div>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>

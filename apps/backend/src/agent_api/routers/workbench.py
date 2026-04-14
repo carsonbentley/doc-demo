@@ -11,11 +11,13 @@ import json
 import math
 import re
 from typing import Any, Callable, Dict, Iterable, List, Set
+from urllib.parse import quote
 
 import fitz  # PyMuPDF
 import numpy as np
 import cv2
 import pytesseract
+import httpx
 from PIL import Image
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from openai import OpenAI
@@ -35,6 +37,71 @@ OCR_CONFIG = "--oem 3 --psm 6"
 PDF_DEBUG_PREVIEW_CHARS = 8000
 OCR_TIMEOUT_SECONDS = 12
 DISTILL_MAX_INPUT_CHARS = 1400
+STORAGE_BUCKET = "workbench-source-documents"
+
+
+def _sanitize_filename(name: str) -> str:
+    sanitized = re.sub(r"[^a-zA-Z0-9._-]+", "-", name).strip(".-")
+    return sanitized or "document.pdf"
+
+
+def _public_storage_url(path: str) -> str:
+    base_url = settings.supabase_url.rstrip("/")
+    return f"{base_url}/storage/v1/object/public/{STORAGE_BUCKET}/{quote(path)}"
+
+
+def _ensure_storage_bucket_exists() -> None:
+    base_url = settings.supabase_url.rstrip("/")
+    headers = {
+        "apikey": settings.supabase_service_key,
+        "Authorization": f"Bearer {settings.supabase_service_key}",
+        "Content-Type": "application/json",
+    }
+    with httpx.Client(timeout=10) as client:
+        list_resp = client.get(f"{base_url}/storage/v1/bucket", headers=headers)
+        if list_resp.status_code >= 400:
+            return
+        existing = list_resp.json() if list_resp.content else []
+        if any(bucket.get("id") == STORAGE_BUCKET for bucket in existing):
+            return
+        client.post(
+            f"{base_url}/storage/v1/bucket",
+            headers=headers,
+            json={"id": STORAGE_BUCKET, "name": STORAGE_BUCKET, "public": True},
+        )
+
+
+def _upload_pdf_to_storage(*, path: str, file_bytes: bytes) -> str | None:
+    if not settings.supabase_url or not settings.supabase_service_key or not file_bytes:
+        return None
+    base_url = settings.supabase_url.rstrip("/")
+    headers = {
+        "apikey": settings.supabase_service_key,
+        "Authorization": f"Bearer {settings.supabase_service_key}",
+        "Content-Type": "application/pdf",
+        "x-upsert": "true",
+    }
+    try:
+        _ensure_storage_bucket_exists()
+        encoded_path = quote(path)
+        with httpx.Client(timeout=30) as client:
+            response = client.post(
+                f"{base_url}/storage/v1/object/{STORAGE_BUCKET}/{encoded_path}",
+                headers=headers,
+                content=file_bytes,
+            )
+            if response.status_code >= 400:
+                logger.warning("PDF storage upload failed status=%s path=%s", response.status_code, path)
+                return None
+        return _public_storage_url(path)
+    except Exception as exc:
+        logger.warning("PDF storage upload failed path=%s error=%s", path, exc)
+        return None
+
+
+def _build_pdf_storage_path(*, organization_id: str, document_kind: str, document_id: str, filename: str) -> str:
+    safe_name = _sanitize_filename(filename)
+    return f"{organization_id}/{document_kind}/{document_id}/{safe_name}"
 
 
 class IngestRequirementsRequest(BaseModel):
@@ -53,6 +120,7 @@ class IngestRequirementsResponse(BaseModel):
     page_count: int | None = None
     ocr_pages: int | None = None
     extraction_warnings: List[str] = []
+    source_pdf_url: str | None = None
 
 
 class IngestWorkDocumentRequest(BaseModel):
@@ -77,6 +145,7 @@ class IngestWorkDocumentResponse(BaseModel):
     page_count: int | None = None
     ocr_pages: int | None = None
     extraction_warnings: List[str] = []
+    source_pdf_url: str | None = None
 
 
 class LinkRequirementsRequest(BaseModel):
@@ -112,6 +181,7 @@ class RequirementsStatusResponse(BaseModel):
     indexed_at: str | None = None
     page_count: int | None = None
     ocr_pages: int | None = None
+    source_pdf_url: str | None = None
 
 
 class WorkHistoryItem(BaseModel):
@@ -160,6 +230,12 @@ class WorkHistoryDetailResponse(BaseModel):
     sections: List[WorkHistorySectionItem]
 
 
+class TextAnchor(BaseModel):
+    start_offset: int
+    end_offset: int
+    snippet: str
+
+
 class RequirementStatementItem(BaseModel):
     id: str
     statement_order: int
@@ -173,6 +249,7 @@ class RequirementStatementItem(BaseModel):
     source_quote: str | None = None
     note_text: str | None = None
     source_page: int | None = None
+    text_anchor: TextAnchor | None = None
 
 
 class RequirementStatementGroup(BaseModel):
@@ -201,8 +278,11 @@ class StatementSowCitation(BaseModel):
     section_title: str
     work_document_title: str | None = None
     source_document_name: str | None = None
+    source_document_url: str | None = None
     quote: str
     similarity: float
+    source_page: int | None = None
+    text_anchor: TextAnchor | None = None
 
 
 class StatementSowLinksEntry(BaseModel):
@@ -362,7 +442,7 @@ def _extract_pdf_text_with_hybrid_ocr(file_bytes: bytes) -> Dict[str, Any]:
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Invalid PDF file: {exc}") from exc
 
-    pages_output: List[str] = []
+    pages_output: List[Dict[str, Any]] = []
     page_count = document.page_count
     ocr_pages = 0
     warnings: Set[str] = set()
@@ -403,16 +483,34 @@ def _extract_pdf_text_with_hybrid_ocr(file_bytes: bytes) -> Dict[str, Any]:
             structured_page_text = f"{structured_page_text}\n\n{figure_marker}".strip()
 
         if structured_page_text:
-            pages_output.append(structured_page_text)
+            pages_output.append({"page_number": page_number, "text": structured_page_text})
         if used_ocr:
             ocr_pages += 1
 
+    merged_pages: List[str] = []
+    page_spans: List[Dict[str, int]] = []
+    cursor = 0
+    for page in pages_output:
+        text = page["text"]
+        start_offset = cursor
+        end_offset = start_offset + len(text)
+        page_spans.append(
+            {
+                "page_number": page["page_number"],
+                "start_offset": start_offset,
+                "end_offset": end_offset,
+            }
+        )
+        merged_pages.append(text)
+        cursor = end_offset + 2
+
     document.close()
     return {
-        "text": "\n\n".join([page for page in pages_output if page]).strip(),
+        "text": "\n\n".join(merged_pages).strip(),
         "page_count": page_count,
         "ocr_pages": ocr_pages,
         "warnings": sorted(warnings),
+        "page_spans": page_spans,
     }
 
 
@@ -700,9 +798,87 @@ def _distill_statement_with_llm(
         }
 
 
-def _iter_requirement_statement_candidates(raw_text: str):
+def _resolve_page_for_offset(offset: int, page_spans: List[Dict[str, int]] | None) -> int | None:
+    if not page_spans:
+        return None
+    for span in page_spans:
+        if span["start_offset"] <= offset <= span["end_offset"]:
+            return int(span["page_number"])
+    return None
+
+
+def _build_text_anchor(raw_text: str, statement_text: str, start_hint: int) -> tuple[Dict[str, Any] | None, int]:
+    if not raw_text or not statement_text:
+        return None, start_hint
+    lowered = raw_text.lower()
+    needle = statement_text.lower()
+    idx = lowered.find(needle, max(0, start_hint))
+    if idx == -1:
+        idx = lowered.find(needle)
+    if idx == -1:
+        # Fallback: tolerant token-sequence match for OCR/punctuation drift.
+        tokens = [t for t in re.findall(r"[a-z0-9]+", needle) if len(t) > 2]
+        tokens = tokens[:10]
+        if len(tokens) >= 3:
+            pattern = r"\b" + r"\W+".join(re.escape(tok) for tok in tokens[:5]) + r"\b"
+            token_match = re.search(pattern, lowered[max(0, start_hint):], flags=re.IGNORECASE)
+            if token_match:
+                idx = max(0, start_hint) + token_match.start()
+                end = max(0, start_hint) + token_match.end()
+                snippet = raw_text[idx:end]
+                return {
+                    "start_offset": idx,
+                    "end_offset": end,
+                    "snippet": snippet,
+                }, end
+            token_match = re.search(pattern, lowered, flags=re.IGNORECASE)
+            if token_match:
+                idx = token_match.start()
+                end = token_match.end()
+                snippet = raw_text[idx:end]
+                return {
+                    "start_offset": idx,
+                    "end_offset": end,
+                    "snippet": snippet,
+                }, end
+        # Final fallback: anchor to a modal-keyword neighborhood from source text,
+        # so every extracted requirement has a deterministic PDF reference point.
+        anchor_tokens = [tok for tok in tokens if tok not in {"shall", "should", "may", "can", "requires"}]
+        probe_tokens = anchor_tokens[:3] if anchor_tokens else tokens[:3]
+        for probe in probe_tokens:
+            probe_idx = lowered.find(probe, max(0, start_hint))
+            if probe_idx == -1:
+                probe_idx = lowered.find(probe)
+            if probe_idx == -1:
+                continue
+            win_start = max(0, probe_idx - 140)
+            win_end = min(len(raw_text), probe_idx + 220)
+            snippet = raw_text[win_start:win_end].strip()
+            if not snippet:
+                continue
+            return {
+                "start_offset": win_start,
+                "end_offset": win_end,
+                "snippet": snippet,
+            }, win_end
+    if idx == -1:
+        return None, start_hint
+    end = idx + len(statement_text)
+    snippet = raw_text[idx:end]
+    return {
+        "start_offset": idx,
+        "end_offset": end,
+        "snippet": snippet,
+    }, end
+
+
+def _iter_requirement_statement_candidates(
+    raw_text: str,
+    page_spans: List[Dict[str, int]] | None = None,
+):
     sections = _split_requirement_sections(raw_text)
     seen: Set[str] = set()
+    search_cursor = 0
 
     for section in sections:
         section_title = section["section_title"]
@@ -728,6 +904,10 @@ def _iter_requirement_statement_candidates(raw_text: str):
                 if dedupe_key in seen:
                     continue
                 seen.add(dedupe_key)
+                text_anchor, search_cursor = _build_text_anchor(raw_text, statement_text, search_cursor)
+                source_page = None
+                if text_anchor:
+                    source_page = _resolve_page_for_offset(text_anchor["start_offset"], page_spans)
 
                 yield {
                     "section_title": section_title,
@@ -736,11 +916,12 @@ def _iter_requirement_statement_candidates(raw_text: str):
                     "statement_text": statement_text,
                     "statement_text_normalized": statement_text.lower(),
                     "note_text": pending_note,
-                    "source_page": None,
+                    "source_page": source_page,
                     "source_block_type": "text",
                     "metadata": {
                         "section_id": section["section_id"],
                         "source": "deterministic_modal_parser",
+                        "text_anchor": text_anchor,
                     },
                 }
                 pending_note = None
@@ -1151,6 +1332,7 @@ def _persist_requirement_statements(
                     "note_text": statement.get("note_text"),
                     "source_page": statement.get("source_page"),
                     "source_block_type": statement.get("source_block_type"),
+                    "text_anchor": (statement.get("metadata") or {}).get("text_anchor"),
                     "metadata": statement.get("metadata") or {},
                 }
             )
@@ -1193,6 +1375,8 @@ def _persist_requirements_from_text(
     page_count: int | None = None,
     ocr_pages: int | None = None,
     extraction_warnings: List[str] | None = None,
+    page_spans: List[Dict[str, int]] | None = None,
+    source_pdf_upload: Dict[str, Any] | None = None,
 ) -> IngestRequirementsResponse:
     if not request.raw_text.strip():
         raise HTTPException(status_code=400, detail="raw_text cannot be empty")
@@ -1205,6 +1389,8 @@ def _persist_requirements_from_text(
             document_metadata["ocr_pages"] = ocr_pages
         if extraction_warnings:
             document_metadata["extraction_warnings"] = extraction_warnings
+        if page_spans:
+            document_metadata["page_spans"] = page_spans
         document_metadata["processing_status"] = "indexing"
         doc_result = supabase.table("requirements_documents").insert(
             {
@@ -1232,9 +1418,32 @@ def _persist_requirements_from_text(
     document = doc_result.data[0]
     doc_id = document["id"]
 
-    extracted_statements = list(_iter_requirement_statement_candidates(request.raw_text))
+    extracted_statements = list(_iter_requirement_statement_candidates(request.raw_text, page_spans=page_spans))
     statement_candidates_total = len(extracted_statements)
     chunks = _chunk_requirements_document(request.raw_text)
+    source_pdf_url: str | None = None
+
+    if source_pdf_upload and source_pdf_upload.get("bytes"):
+        storage_path = _build_pdf_storage_path(
+            organization_id=request.organization_id,
+            document_kind="requirements",
+            document_id=doc_id,
+            filename=str(source_pdf_upload.get("filename") or request.source_name or "requirements.pdf"),
+        )
+        source_pdf_url = _upload_pdf_to_storage(path=storage_path, file_bytes=source_pdf_upload["bytes"])
+        if source_pdf_url:
+            document_metadata["source_pdf_url"] = source_pdf_url
+            document_metadata["source_pdf_path"] = storage_path
+            try:
+                supabase.table("requirements_documents").update(
+                    {
+                        "metadata": document_metadata,
+                        "source_pdf_url": source_pdf_url,
+                        "source_pdf_path": storage_path,
+                    }
+                ).eq("id", doc_id).execute()
+            except Exception as exc:
+                logger.warning("Failed updating requirements document PDF metadata doc_id=%s err=%s", doc_id, exc)
 
     progress = _RequirementsDocProgress(
         supabase=supabase,
@@ -1322,6 +1531,7 @@ def _persist_requirements_from_text(
         page_count=page_count,
         ocr_pages=ocr_pages,
         extraction_warnings=extraction_warnings or [],
+        source_pdf_url=source_pdf_url,
     )
 
 
@@ -1334,6 +1544,8 @@ def _persist_work_from_text(
     source_document_name: str | None = None,
     source_document_path: str | None = None,
     work_document_metadata: Dict[str, Any] | None = None,
+    source_pdf_upload: Dict[str, Any] | None = None,
+    page_spans: List[Dict[str, int]] | None = None,
 ) -> IngestWorkDocumentResponse:
     if not request.raw_text.strip():
         raise HTTPException(status_code=400, detail="raw_text cannot be empty")
@@ -1368,22 +1580,53 @@ def _persist_work_from_text(
         raise HTTPException(status_code=500, detail="Failed to create work document")
 
     document = doc_result.data[0]
+    source_pdf_url: str | None = None
+    if source_pdf_upload and source_pdf_upload.get("bytes"):
+        storage_path = _build_pdf_storage_path(
+            organization_id=request.organization_id,
+            document_kind="work",
+            document_id=document["id"],
+            filename=str(source_pdf_upload.get("filename") or source_document_name or request.title),
+        )
+        source_pdf_url = _upload_pdf_to_storage(path=storage_path, file_bytes=source_pdf_upload["bytes"])
+        if source_pdf_url:
+            document_metadata["source_pdf_url"] = source_pdf_url
+            document_metadata["source_pdf_path"] = storage_path
+            try:
+                supabase.table("work_documents").update(
+                    {
+                        "metadata": document_metadata,
+                        "source_pdf_url": source_pdf_url,
+                        "source_pdf_path": storage_path,
+                    }
+                ).eq("id", document["id"]).execute()
+            except Exception as exc:
+                logger.warning("Failed updating work document PDF metadata doc_id=%s err=%s", document["id"], exc)
     sections = _split_sections(request.raw_text)
-    section_rows = [
-        {
-            "organization_id": request.organization_id,
-            "work_document_id": document["id"],
-            "section_key": f"section-{idx + 1}",
-            "section_title": section["section_title"],
-            "content": section["content"],
-            "section_order": idx + 1,
-            "metadata": {
-                "source_document_name": source_document_name or request.title,
-                "source_document_path": source_document_path,
-            },
-        }
-        for idx, section in enumerate(sections)
-    ]
+    search_cursor = 0
+    section_rows = []
+    for idx, section in enumerate(sections):
+        anchor, search_cursor = _build_text_anchor(request.raw_text, section["content"], search_cursor)
+        source_page = None
+        if anchor:
+            source_page = _resolve_page_for_offset(anchor["start_offset"], page_spans)
+        section_rows.append(
+            {
+                "organization_id": request.organization_id,
+                "work_document_id": document["id"],
+                "section_key": f"section-{idx + 1}",
+                "section_title": section["section_title"],
+                "content": section["content"],
+                "section_order": idx + 1,
+                "metadata": {
+                    "source_document_name": source_document_name or request.title,
+                    "source_document_path": source_document_path,
+                    "source_document_url": source_pdf_url,
+                    "source_page": source_page,
+                    "text_anchor": anchor,
+                },
+            }
+        )
 
     try:
         inserted = supabase.table("work_sections").insert(section_rows).execute() if section_rows else None
@@ -1413,6 +1656,7 @@ def _persist_work_from_text(
         page_count=page_count,
         ocr_pages=ocr_pages,
         extraction_warnings=extraction_warnings or [],
+        source_pdf_url=source_pdf_url,
     )
 
 
@@ -1438,6 +1682,8 @@ async def _extract_work_upload_payload(file: UploadFile) -> Dict[str, Any]:
             "page_count": extracted.get("page_count"),
             "ocr_pages": extracted.get("ocr_pages"),
             "warnings": extracted.get("warnings") or [],
+            "page_spans": extracted.get("page_spans") or [],
+            "bytes": file_bytes,
         }
 
     if suffix.endswith(".txt") or suffix.endswith(".md"):
@@ -1455,6 +1701,7 @@ async def _extract_work_upload_payload(file: UploadFile) -> Dict[str, Any]:
             "page_count": None,
             "ocr_pages": None,
             "warnings": [],
+            "page_spans": [],
         }
 
     raise HTTPException(
@@ -1517,6 +1764,8 @@ async def ingest_requirements_pdf(
         page_count=extracted["page_count"],
         ocr_pages=extracted["ocr_pages"],
         extraction_warnings=extracted["warnings"],
+        page_spans=extracted.get("page_spans") or [],
+        source_pdf_upload={"filename": file.filename, "bytes": file_bytes},
     )
 
 
@@ -1556,6 +1805,8 @@ async def ingest_work_pdf(
         ocr_pages=extracted["ocr_pages"],
         extraction_warnings=extracted["warnings"],
         source_document_name=file.filename,
+        source_pdf_upload={"filename": file.filename, "bytes": file_bytes},
+        page_spans=extracted.get("page_spans") or [],
     )
 
 
@@ -1618,11 +1869,45 @@ async def ingest_work_batch(
         work_document_metadata=metadata,
     )
 
+    source_document_urls: Dict[str, str] = {}
+    for item in extracted_files:
+        if item.get("source_type") != "pdf" or not item.get("bytes"):
+            continue
+        storage_path = _build_pdf_storage_path(
+            organization_id=organization_id,
+            document_kind="work",
+            document_id=result.work_document_id,
+            filename=item["filename"],
+        )
+        public_url = _upload_pdf_to_storage(path=storage_path, file_bytes=item["bytes"])
+        if public_url:
+            source_document_urls[item["filename"]] = public_url
+
+    if source_document_urls:
+        try:
+            work_doc_result = (
+                supabase.table("work_documents")
+                .select("metadata")
+                .eq("id", result.work_document_id)
+                .limit(1)
+                .execute()
+            )
+            existing_meta = ((work_doc_result.data or [None])[0] or {}).get("metadata") or {}
+            existing_meta["source_pdf_files"] = source_document_urls
+            supabase.table("work_documents").update({"metadata": existing_meta}).eq("id", result.work_document_id).execute()
+        except Exception as exc:
+            logger.warning("Failed updating batch work PDF metadata doc_id=%s err=%s", result.work_document_id, exc)
+
     section_rows = []
     order_counter = 1
     for item in extracted_files:
         sections = _split_sections(item["text"])
+        source_cursor = 0
         for idx, section in enumerate(sections):
+            anchor, source_cursor = _build_text_anchor(item["text"], section["content"], source_cursor)
+            source_page = None
+            if anchor:
+                source_page = _resolve_page_for_offset(anchor["start_offset"], item.get("page_spans") or [])
             section_rows.append(
                 {
                     "organization_id": organization_id,
@@ -1635,6 +1920,9 @@ async def ingest_work_batch(
                         "source_document_name": item["filename"],
                         "source_document_path": item["filename"],
                         "source_document_index": idx + 1,
+                        "source_document_url": source_document_urls.get(item["filename"]),
+                        "source_page": source_page,
+                        "text_anchor": anchor,
                     },
                 }
             )
@@ -1879,7 +2167,7 @@ async def requirements_status(
     try:
         latest_doc_result = (
             supabase.table("requirements_documents")
-            .select("id, title, source_type, source_name, raw_text, metadata, created_at")
+            .select("id, title, source_type, source_name, raw_text, metadata, source_pdf_url, created_at")
             .eq("organization_id", organization_id)
             .order("created_at", desc=True)
             .limit(1)
@@ -1943,6 +2231,7 @@ async def requirements_status(
         indexed_at=latest_doc.get("created_at"),
         page_count=metadata.get("page_count"),
         ocr_pages=metadata.get("ocr_pages"),
+        source_pdf_url=latest_doc.get("source_pdf_url") or metadata.get("source_pdf_url"),
     )
 
 
@@ -1955,19 +2244,64 @@ async def requirements_statements(
     organization_id: str,
     supabase=Depends(get_supabase_client),
 ):
+    document_raw_text = ""
+    document_page_spans: List[Dict[str, int]] = []
+    try:
+        doc_result = (
+            supabase.table("requirements_documents")
+            .select("raw_text, metadata")
+            .eq("organization_id", organization_id)
+            .eq("id", requirements_document_id)
+            .limit(1)
+            .execute()
+        )
+        doc_row = (doc_result.data or [None])[0] or {}
+        document_raw_text = str(doc_row.get("raw_text") or "")
+        doc_metadata = doc_row.get("metadata") or {}
+        spans = doc_metadata.get("page_spans") if isinstance(doc_metadata, dict) else None
+        if isinstance(spans, list):
+            document_page_spans = [
+                {
+                    "page_number": int(span.get("page_number")),
+                    "start_offset": int(span.get("start_offset")),
+                    "end_offset": int(span.get("end_offset")),
+                }
+                for span in spans
+                if isinstance(span, dict)
+                and span.get("page_number") is not None
+                and span.get("start_offset") is not None
+                and span.get("end_offset") is not None
+            ]
+    except Exception:
+        document_raw_text = ""
+        document_page_spans = []
+
     try:
         rows_result = (
             supabase.table("requirements_statements")
             .select(
-                "id, statement_order, section_title, modal_verb, statement_text, note_text, source_page, metadata"
+                "id, statement_order, section_title, modal_verb, statement_text, note_text, source_page, text_anchor, metadata"
             )
             .eq("organization_id", organization_id)
             .eq("requirements_document_id", requirements_document_id)
             .order("statement_order", desc=False)
             .execute()
         )
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail="Failed to load requirements statements.") from exc
+    except Exception:
+        # Backward-compatible fallback while migration rollout catches up.
+        try:
+            rows_result = (
+                supabase.table("requirements_statements")
+                .select(
+                    "id, statement_order, section_title, modal_verb, statement_text, note_text, source_page, metadata"
+                )
+                .eq("organization_id", organization_id)
+                .eq("requirements_document_id", requirements_document_id)
+                .order("statement_order", desc=False)
+                .execute()
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="Failed to load requirements statements.") from exc
 
     rows = rows_result.data or []
     grouped: Dict[str, List[RequirementStatementItem]] = {verb: [] for verb in MODAL_VERBS}
@@ -1977,6 +2311,16 @@ async def requirements_statements(
         if verb not in grouped:
             continue
         metadata = row.get("metadata") or {}
+        row_anchor = row.get("text_anchor") or metadata.get("text_anchor")
+        fallback_anchor = None
+        if not row_anchor and document_raw_text:
+            # Anchor from original extracted requirement text, not distilled summary.
+            source_requirement_text = str(row.get("statement_text") or "")
+            fallback_anchor, _ = _build_text_anchor(document_raw_text, source_requirement_text, 0)
+        resolved_anchor = row_anchor if isinstance(row_anchor, dict) else fallback_anchor
+        resolved_source_page = row.get("source_page")
+        if resolved_source_page is None and resolved_anchor:
+            resolved_source_page = _resolve_page_for_offset(int(resolved_anchor.get("start_offset")), document_page_spans)
         grouped[verb].append(
             RequirementStatementItem(
                 id=row["id"],
@@ -1996,7 +2340,18 @@ async def requirements_statements(
                 distilled_text=metadata.get("distilled_text"),
                 source_quote=row["statement_text"],
                 note_text=row.get("note_text"),
-                source_page=row.get("source_page"),
+                source_page=resolved_source_page,
+                text_anchor=(
+                    TextAnchor(
+                        start_offset=int((resolved_anchor or {}).get("start_offset")),
+                        end_offset=int((resolved_anchor or {}).get("end_offset")),
+                        snippet=str((resolved_anchor or {}).get("snippet") or ""),
+                    )
+                    if isinstance(resolved_anchor, dict)
+                    and (resolved_anchor or {}).get("start_offset") is not None
+                    and (resolved_anchor or {}).get("end_offset") is not None
+                    else None
+                ),
             )
         )
 
@@ -2171,15 +2526,30 @@ async def requirements_statement_sow_links(
                     continue
                 ws_meta = section.get("metadata") or {}
                 source_name = ws_meta.get("source_document_name")
+                source_document_url = ws_meta.get("source_document_url")
                 sim = float(link.get("similarity") or 0.0)
                 quote = _excerpt_text(section.get("content") or "", max_chars=560)
+                anchor_meta = ws_meta.get("text_anchor") if isinstance(ws_meta, dict) else None
                 citation = StatementSowCitation(
                     work_section_id=ws_id,
                     section_title=section.get("section_title") or "Section",
                     work_document_title=work_document_title,
                     source_document_name=source_name,
+                    source_document_url=source_document_url,
                     quote=quote,
                     similarity=sim,
+                    source_page=ws_meta.get("source_page"),
+                    text_anchor=(
+                        TextAnchor(
+                            start_offset=int(anchor_meta.get("start_offset")),
+                            end_offset=int(anchor_meta.get("end_offset")),
+                            snippet=str(anchor_meta.get("snippet") or ""),
+                        )
+                        if isinstance(anchor_meta, dict)
+                        and anchor_meta.get("start_offset") is not None
+                        and anchor_meta.get("end_offset") is not None
+                        else None
+                    ),
                 )
                 existing = citation_map.get(ws_id)
                 if not existing or existing.similarity < citation.similarity:

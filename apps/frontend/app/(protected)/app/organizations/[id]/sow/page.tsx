@@ -11,7 +11,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { LoadingSpinner } from '@/components/ui/loading-spinner';
 import { RequirementsStepProgress } from '@/components/app/requirements-step-progress';
-import { RequirementsDocumentViewer } from '@/components/app/requirements-document-viewer';
+import { RequirementsPdfViewer } from '@/components/app/requirements-pdf-viewer';
 import { RequirementsStatementsGroups } from '@/components/app/requirements-statements-groups';
 import { SowUploadPrimary } from '@/components/app/sow-upload-primary';
 import { type SectionLink } from '@/components/app/section-link-card';
@@ -44,6 +44,7 @@ type RequirementsStatus = {
   latest_source_type: string | null;
   latest_source_name: string | null;
   latest_raw_text: string | null;
+  latest_source_pdf_url?: string | null;
   chunk_count: number;
   chunk_total?: number;
   statement_count?: number;
@@ -70,6 +71,11 @@ type RequirementStatement = {
   source_quote?: string | null;
   note_text?: string | null;
   source_page?: number | null;
+  text_anchor?: {
+    start_offset: number;
+    end_offset: number;
+    snippet: string;
+  } | null;
 };
 
 type RequirementStatementGroup = {
@@ -84,8 +90,15 @@ type StatementSowCitation = {
   section_title: string;
   work_document_title?: string | null;
   source_document_name?: string | null;
+  source_document_url?: string | null;
   quote: string;
   similarity: number;
+  source_page?: number | null;
+  text_anchor?: {
+    start_offset: number;
+    end_offset: number;
+    snippet: string;
+  } | null;
 };
 
 const API_BASE_URL =
@@ -96,14 +109,25 @@ type RequirementsDocRow = {
   title: string | null;
   source_type: string | null;
   source_name: string | null;
+  source_pdf_url?: string | null;
   raw_text: string | null;
   metadata?: {
     processing_status?: string;
     chunk_total?: number;
     statement_count?: number;
     statement_candidates_total?: number;
+    source_pdf_url?: string;
   } | null;
   created_at?: string;
+};
+
+type ViewerTarget = {
+  documentType: 'requirements' | 'work';
+  page?: number | null;
+  snippet?: string | null;
+  label?: string | null;
+  workDocUrl?: string | null;
+  statementId?: string;
 };
 
 function mapHistoryDetailToLinkedSections(payload: {
@@ -196,6 +220,7 @@ export default function SowUploadPage() {
   const [uploadMoreOpen, setUploadMoreOpen] = useState(false);
   const [sowSettingsDraftOverlapPct, setSowSettingsDraftOverlapPct] = useState(75);
   const [sowSettingsDraftMaxCitations, setSowSettingsDraftMaxCitations] = useState(3);
+  const [viewerTarget, setViewerTarget] = useState<ViewerTarget | null>(null);
   const filesInputRef = useRef<HTMLInputElement | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -209,6 +234,7 @@ export default function SowUploadPage() {
     setLinkedSections([]);
     setLinkedRequirementsDocumentId(null);
     setCitationsContext(null);
+    setViewerTarget(null);
   }, [organizationId]);
 
   useEffect(() => {
@@ -232,7 +258,7 @@ export default function SowUploadPage() {
     try {
       const docsResult = await supabase
         .from('requirements_documents')
-        .select('id, title, source_type, source_name, raw_text, metadata, created_at')
+        .select('id, title, source_type, source_name, source_pdf_url, raw_text, metadata, created_at')
         .eq('organization_id', organizationId)
         .order('created_at', { ascending: false })
         .limit(20);
@@ -250,6 +276,7 @@ export default function SowUploadPage() {
           latest_title: null,
           latest_source_type: null,
           latest_source_name: null,
+          latest_source_pdf_url: null,
           latest_raw_text: null,
           chunk_count: 0,
         });
@@ -301,6 +328,7 @@ export default function SowUploadPage() {
         latest_title: preferredDoc.title,
         latest_source_type: preferredDoc.source_type,
         latest_source_name: preferredDoc.source_name,
+        latest_source_pdf_url: preferredDoc.source_pdf_url || preferredDoc.metadata?.source_pdf_url || null,
         latest_raw_text: preferredDoc.raw_text,
         chunk_count: chunkCount,
         chunk_total: chunkTotal,
@@ -421,11 +449,13 @@ export default function SowUploadPage() {
       }
     };
     void loadStatements();
+    const shouldPoll = indexing || statementGroups.length === 0;
+    if (!shouldPoll) return;
     const pollId = setInterval(() => {
       void loadStatements();
-    }, 1500);
+    }, 3000);
     return () => clearInterval(pollId);
-  }, [activeRequirementsDocumentId, organizationId]);
+  }, [activeRequirementsDocumentId, organizationId, indexing, statementGroups.length]);
 
   useEffect(() => {
     if (!organizationId) return;
@@ -491,6 +521,14 @@ export default function SowUploadPage() {
   }, [linkedWorkDocumentId, statementSowCitations]);
   const missedRequirementCount = Math.max(statementRowTotal - linkedRequirementCount, 0);
   const coveragePct = statementRowTotal > 0 ? Math.round((linkedRequirementCount / statementRowTotal) * 100) : 0;
+  const focusedStatementCitations = useMemo(() => {
+    if (!viewerTarget?.statementId) return [];
+    return (statementSowCitations[viewerTarget.statementId] || []).map((citation) => ({
+      sectionTitle: citation.section_title,
+      quote: citation.quote,
+      sourceDocumentName: citation.source_document_name,
+    }));
+  }, [statementSowCitations, viewerTarget?.statementId]);
 
   const fetchStatementSowCitations = async (
     requirementsDocumentId: string,
@@ -516,6 +554,40 @@ export default function SowUploadPage() {
       next[row.requirement_statement_id] = row.citations || [];
     }
     return next;
+  };
+
+  const handleViewStatementInDocument = (statement: RequirementStatement) => {
+    console.info('[PDF_DEBUG] view_in_document_statement_click', {
+      statementId: statement.id,
+      sourcePage: statement.source_page ?? null,
+      hasTextAnchor: Boolean(statement.text_anchor?.snippet),
+      snippetPreview: (statement.text_anchor?.snippet || statement.source_quote || statement.statement_text || '').slice(0, 160),
+    });
+    setViewerTarget({
+      documentType: 'requirements',
+      page: statement.source_page ?? null,
+      snippet: statement.text_anchor?.snippet || statement.source_quote || statement.statement_text,
+      label: statement.requirement_summary || statement.distilled_text || statement.statement_text,
+      statementId: statement.id,
+    });
+  };
+
+  const handleViewCitationInDocument = (statement: RequirementStatement, citation: StatementSowCitation) => {
+    console.info('[PDF_DEBUG] view_in_document_citation_click', {
+      statementId: statement.id,
+      sourcePage: citation.source_page ?? null,
+      hasTextAnchor: Boolean(citation.text_anchor?.snippet),
+      hasSourceDocumentUrl: Boolean(citation.source_document_url),
+      snippetPreview: (citation.text_anchor?.snippet || citation.quote || '').slice(0, 160),
+    });
+    setViewerTarget({
+      documentType: 'work',
+      page: citation.source_page ?? null,
+      snippet: citation.text_anchor?.snippet || citation.quote,
+      label: `${citation.source_document_name || citation.work_document_title || 'Linked document'} • ${citation.section_title}`,
+      workDocUrl: citation.source_document_url || null,
+      statementId: statement.id,
+    });
   };
 
   useEffect(() => {
@@ -704,20 +776,31 @@ export default function SowUploadPage() {
   };
 
   const hasLinkedSections = linkedSections.length > 0;
+  const activeViewerPdfUrl =
+    viewerTarget?.documentType === 'work'
+      ? viewerTarget.workDocUrl || null
+      : status?.latest_source_pdf_url || null;
+  const requirementHighlightAnchors = useMemo(
+    () =>
+      statementGroups.flatMap((group) =>
+        group.items.map((statement) => ({
+          id: statement.id,
+          page: statement.source_page ?? null,
+          snippet: statement.text_anchor?.snippet || statement.source_quote || statement.statement_text,
+        }))
+      ),
+    [statementGroups]
+  );
 
-  const requirementsColumn = (
+  const requirementsListColumn = (
     <div className="space-y-4">
-      <RequirementsDocumentViewer
-        title={status?.latest_title}
-        sourceType={status?.latest_source_type}
-        sourceName={status?.latest_source_name}
-        rawText={status?.latest_raw_text}
-      />
       {status?.latest_requirements_document_id ? (
         <RequirementsStatementsGroups
           groups={statementGroups}
           statementSowCitations={hasLinkedSections ? statementSowCitations : undefined}
           sowCitationsLoading={hasLinkedSections && sowCitationsLoading}
+          onViewStatementInDocument={handleViewStatementInDocument}
+          onViewCitationInDocument={hasLinkedSections ? handleViewCitationInDocument : undefined}
         />
       ) : (
         <Card>
@@ -727,6 +810,48 @@ export default function SowUploadPage() {
         </Card>
       )}
     </div>
+  );
+
+  const viewerColumn = (
+    <div className="h-full">
+      <RequirementsPdfViewer
+        title={status?.latest_title}
+        sourceType={status?.latest_source_type}
+        sourceName={status?.latest_source_name}
+        rawText={status?.latest_raw_text}
+        pdfUrl={activeViewerPdfUrl}
+        focusPage={viewerTarget?.page}
+        focusSnippet={viewerTarget?.snippet}
+        focusLabel={viewerTarget?.label}
+        linkedCitations={focusedStatementCitations}
+        highlightAnchors={viewerTarget?.documentType === 'requirements' || !viewerTarget ? requirementHighlightAnchors : []}
+        activeAnchorId={viewerTarget?.statementId || null}
+      />
+    </div>
+  );
+
+  const requirementsSourceCard = (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base font-semibold">Uploaded Requirements Document</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2 text-sm text-gray-700">
+        <p>
+          <span className="font-medium text-gray-900">Title:</span> {status?.latest_title || 'Untitled'}
+        </p>
+        <p>
+          <span className="font-medium text-gray-900">Source Type:</span> {status?.latest_source_type || 'unknown'}
+        </p>
+        {status?.latest_source_name ? (
+          <p>
+            <span className="font-medium text-gray-900">Source:</span> {status.latest_source_name}
+          </p>
+        ) : null}
+        <p className="text-xs text-gray-500">
+          Use “View in document” on any requirement to jump to the related page and highlight context.
+        </p>
+      </CardContent>
+    </Card>
   );
 
   const openSowSettings = () => {
@@ -969,7 +1094,14 @@ export default function SowUploadPage() {
                 </CardContent>
               </Card>
             ) : null}
-            {requirementsColumn}
+            <div className="grid gap-6 lg:grid-cols-2">
+              <div className="min-w-0">{sowSourceUploadCard}</div>
+              <div className="min-w-0">{requirementsSourceCard}</div>
+            </div>
+            <div className="grid gap-6 lg:grid-cols-2">
+              <div className="min-w-0 lg:sticky lg:top-[5.75rem] lg:h-[calc(100dvh-7rem)]">{viewerColumn}</div>
+              <div className="min-w-0">{requirementsListColumn}</div>
+            </div>
             <p className="border-t border-gray-200 pt-6 text-sm text-gray-500">
               Links are saved automatically. Open <span className="font-medium">View History</span> to browse past document uploads.
             </p>
@@ -995,11 +1127,15 @@ export default function SowUploadPage() {
           {error ? <div className="rounded-md bg-red-50 p-3 text-sm text-red-700">{error}</div> : null}
 
           <div className="grid gap-6 lg:grid-cols-2">
-            {requirementsColumn}
             <div className="space-y-4">
               <SowUploadPrimary hasSow={false} />
               {sowSourceUploadCard}
             </div>
+            <div className="space-y-4">{requirementsSourceCard}</div>
+          </div>
+          <div className="grid gap-6 lg:grid-cols-2">
+            <div className="min-w-0 lg:sticky lg:top-[5.75rem] lg:h-[calc(100dvh-7rem)]">{viewerColumn}</div>
+            <div className="min-w-0">{requirementsListColumn}</div>
           </div>
         </div>
       )}

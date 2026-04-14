@@ -192,6 +192,8 @@ export type Database = {
           metadata: Json
           organization_id: string
           raw_text: string
+          source_pdf_path: string | null
+          source_pdf_url: string | null
           source_name: string | null
           source_type: string
           title: string
@@ -204,6 +206,8 @@ export type Database = {
           metadata?: Json
           organization_id: string
           raw_text: string
+          source_pdf_path?: string | null
+          source_pdf_url?: string | null
           source_name?: string | null
           source_type?: string
           title: string
@@ -216,6 +220,8 @@ export type Database = {
           metadata?: Json
           organization_id?: string
           raw_text?: string
+          source_pdf_path?: string | null
+          source_pdf_url?: string | null
           source_name?: string | null
           source_type?: string
           title?: string
@@ -392,6 +398,8 @@ export type Database = {
           metadata: Json
           organization_id: string
           raw_text: string
+          source_pdf_path: string | null
+          source_pdf_url: string | null
           title: string
           updated_at: string
           uploaded_by: string
@@ -402,6 +410,8 @@ export type Database = {
           metadata?: Json
           organization_id: string
           raw_text: string
+          source_pdf_path?: string | null
+          source_pdf_url?: string | null
           title: string
           updated_at?: string
           uploaded_by: string
@@ -412,6 +422,8 @@ export type Database = {
           metadata?: Json
           organization_id?: string
           raw_text?: string
+          source_pdf_path?: string | null
+          source_pdf_url?: string | null
           title?: string
           updated_at?: string
           uploaded_by?: string

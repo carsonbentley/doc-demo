@@ -7,6 +7,12 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { LoadingSpinner } from '@/components/ui/loading-spinner';
 
+type TextAnchor = {
+  start_offset: number;
+  end_offset: number;
+  snippet: string;
+};
+
 type RequirementStatement = {
   id: string;
   statement_order: number;
@@ -20,6 +26,7 @@ type RequirementStatement = {
   source_quote?: string | null;
   note_text?: string | null;
   source_page?: number | null;
+  text_anchor?: TextAnchor | null;
 };
 
 type RequirementStatementGroup = {
@@ -34,8 +41,11 @@ export type StatementSowCitation = {
   section_title: string;
   work_document_title?: string | null;
   source_document_name?: string | null;
+  source_document_url?: string | null;
   quote: string;
   similarity: number;
+  source_page?: number | null;
+  text_anchor?: TextAnchor | null;
 };
 
 type RequirementsStatementsGroupsProps = {
@@ -43,6 +53,8 @@ type RequirementsStatementsGroupsProps = {
   /** When set (e.g. after SOW linking), expanded rows show matching SOW excerpts. */
   statementSowCitations?: Record<string, StatementSowCitation[]>;
   sowCitationsLoading?: boolean;
+  onViewStatementInDocument?: (statement: RequirementStatement) => void;
+  onViewCitationInDocument?: (statement: RequirementStatement, citation: StatementSowCitation) => void;
 };
 
 const VERB_BADGE_STYLES: Record<string, string> = {
@@ -57,6 +69,8 @@ export function RequirementsStatementsGroups({
   groups,
   statementSowCitations,
   sowCitationsLoading,
+  onViewStatementInDocument,
+  onViewCitationInDocument,
 }: RequirementsStatementsGroupsProps) {
   const cleanSectionTitle = (title: string) =>
     title.replace(/^section\s+\d+(?:\.\d+)*\s*[:\-]?\s*/i, '').trim() || title;
@@ -226,6 +240,13 @@ export function RequirementsStatementsGroups({
                     </p>
                   </summary>
                   <div className="mt-3 border-t pt-3">
+                    {onViewStatementInDocument ? (
+                      <div className="mb-3">
+                        <Button type="button" size="sm" variant="outline" onClick={() => onViewStatementInDocument(statement)}>
+                          View in document
+                        </Button>
+                      </div>
+                    ) : null}
                     <p className="mb-2 text-xs uppercase tracking-wide text-gray-500">Expanded Requirement</p>
                     <p className="text-sm text-gray-800">
                       {statement.distilled_text || statement.statement_text}
@@ -277,6 +298,18 @@ export function RequirementsStatementsGroups({
                                     </div>
                                     <p className="mb-1 text-xs font-medium text-gray-700">{c.section_title}</p>
                                     <p className="text-sm leading-relaxed text-gray-800">{c.quote}</p>
+                                    {onViewCitationInDocument && c.source_document_url ? (
+                                      <div className="mt-2">
+                                        <Button
+                                          type="button"
+                                          size="sm"
+                                          variant="secondary"
+                                          onClick={() => onViewCitationInDocument(statement, c)}
+                                        >
+                                          Open linked document
+                                        </Button>
+                                      </div>
+                                    ) : null}
                                   </li>
                                 ))}
                               </ul>
