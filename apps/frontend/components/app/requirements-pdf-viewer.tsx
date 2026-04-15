@@ -487,7 +487,15 @@ export function RequirementsPdfViewer({
 
     const active = root.querySelector('.pdf-active-highlight');
     if (active && active instanceof HTMLElement) {
-      active.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      const containerRect = root.getBoundingClientRect();
+      const activeRect = active.getBoundingClientRect();
+      const pad = 32;
+      const isAbove = activeRect.top < containerRect.top + pad;
+      const isBelow = activeRect.bottom > containerRect.bottom - pad;
+      if (isAbove || isBelow) {
+        const delta = activeRect.top - containerRect.top - containerRect.height / 2 + activeRect.height / 2;
+        root.scrollTo({ top: root.scrollTop + delta, behavior: 'auto' });
+      }
     }
   };
 

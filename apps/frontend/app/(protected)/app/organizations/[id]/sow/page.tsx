@@ -353,6 +353,7 @@ export default function SowUploadPage() {
 
   useEffect(() => {
     if (!organizationId || !userId) return;
+    if (status?.indexed && status?.latest_requirements_document_id) return;
 
     let cancelled = false;
     const tick = async () => {
@@ -370,7 +371,7 @@ export default function SowUploadPage() {
       cancelled = true;
       clearInterval(intervalId);
     };
-  }, [organizationId, userId, searchParams]);
+  }, [organizationId, userId, status?.indexed, status?.latest_requirements_document_id]);
 
   useEffect(() => {
     const shouldAutoIndex = searchParams.get('autoIndex') === '1';
@@ -391,7 +392,7 @@ export default function SowUploadPage() {
           if (!pending.file) {
             // PDF file cannot survive full refresh. Keep UX non-blocking and ask for re-upload.
             setIndexing(false);
-            router.replace(`/app/organizations/${organizationId}/sow`);
+            router.replace(`/app/organizations/${organizationId}/sow`, { scroll: false });
             return;
           }
           const formData = new FormData();
@@ -422,7 +423,7 @@ export default function SowUploadPage() {
 
         if (ok) {
           clearPendingRequirementsPayload();
-          router.replace(`/app/organizations/${organizationId}/sow`);
+          router.replace(`/app/organizations/${organizationId}/sow`, { scroll: false });
         } else {
           setTimeout(() => {
             setIndexingStarted(false);
