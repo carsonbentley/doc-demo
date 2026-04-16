@@ -500,11 +500,11 @@ export function RequirementsPdfViewer({
   };
 
   return (
-    <Card className="flex h-full min-h-0 flex-col">
+    <Card className="flex w-full min-w-0 flex-col rounded-xl shadow-sm">
       <CardHeader className="shrink-0 space-y-0 py-3">
         <CardTitle className="text-sm font-semibold text-gray-900">Document</CardTitle>
       </CardHeader>
-      <CardContent className="flex min-h-0 flex-1 flex-col gap-2 px-3 pb-3 pt-0 sm:px-4 sm:pb-4">
+      <CardContent className="flex flex-col gap-2 px-3 pb-3 pt-0 sm:px-4 sm:pb-4">
         {focusSnippet ? (
           <div className="rounded-md border border-blue-200 bg-blue-50 p-2 text-xs text-blue-900">
             <p className="font-semibold">{focusLabel || 'Focused requirement'}</p>
@@ -527,7 +527,7 @@ export function RequirementsPdfViewer({
         ) : null}
 
         {pdfUrl ? (
-          <div className="flex min-h-0 flex-1 flex-col gap-3">
+          <div className="flex flex-col gap-3">
             <div className="flex items-center justify-between rounded-md border bg-gray-50 p-2">
               <Button
                 type="button"
@@ -561,7 +561,7 @@ export function RequirementsPdfViewer({
               </Button>
             </div>
 
-            <div ref={viewerRef} className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto rounded-md border bg-white p-2">
+            <div ref={viewerRef} className="w-full overflow-x-hidden rounded-md border bg-white p-2">
               <Document
                 file={pdfUrl}
                 onLoadSuccess={(doc) => {

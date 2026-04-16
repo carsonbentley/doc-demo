@@ -2,6 +2,18 @@
 
 Use these commands after creating a new blank Supabase project.
 
+## Migration layout (greenfield)
+
+`supabase db push` applies **every** file in `tools/configs/supabase/migrations/` in filename order.
+
+- Migrations dated **before** `20260323100000_defense_demo_baseline.sql` are **no-ops** (`select 1`). They are kept so older environments that already ran the historical SQL keep the same migration filenames and checksum history.
+- **Effective schema** for a new database comes from:
+  - `20260323100000_defense_demo_baseline.sql` (core tables, RLS, `match_requirements_chunks`, `get_team_members`)
+  - `20260403100000`–`20260413113000` (requirements statements, work metadata, PDF anchor columns)
+  - `20260415120000_team_and_invite_rpcs.sql` (team join/create/invite/leave RPCs aligned with the baseline model)
+
+If you need legacy tables from the old product (for example Google Docs–related tables), restore them from a **database backup** or the previous migration bodies in git history—they are intentionally not applied on greenfield installs.
+
 ## 1) Authenticate and link project
 
 ```bash
@@ -9,7 +21,7 @@ supabase login
 supabase link --project-ref <NEW_SUPABASE_PROJECT_ID>
 ```
 
-## 2) Apply the baseline schema
+## 2) Apply migrations
 
 From repo root:
 
@@ -18,7 +30,7 @@ cd tools/configs
 supabase db push
 ```
 
-This applies `supabase/migrations/20260323100000_defense_demo_baseline.sql`.
+This runs the full chain above, not only the baseline file.
 
 ## 3) Optional: seed a demo team/user/org
 
@@ -54,9 +66,10 @@ OPENAI_API_KEY=<optional_for_real_embeddings>
 
 ## 5) Regenerate frontend DB types
 
-From repo root:
+From repo root (point at the **new** project):
 
 ```bash
 SUPABASE_PROJECT_ID=<NEW_SUPABASE_PROJECT_ID> npm run gen:db:types
 ```
 
+The committed `apps/frontend/types/database.ts` is updated manually when migrations change; regenerating overwrites it with the live project and is the source of truth after a new deploy.

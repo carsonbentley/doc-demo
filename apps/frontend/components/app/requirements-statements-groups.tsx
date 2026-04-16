@@ -146,9 +146,9 @@ export function RequirementsStatementsGroups({
   const visibleItems = filteredItems.slice(0, visibleCount);
 
   return (
-    <div className="space-y-4">
-      <Card>
-        <CardHeader className="space-y-3">
+    <div className="flex h-full max-h-full min-h-0 min-w-0 flex-col overflow-hidden">
+      <Card className="flex h-full max-h-full min-h-0 flex-col overflow-hidden rounded-xl shadow-sm">
+        <CardHeader className="shrink-0 space-y-3 border-b border-gray-100 bg-card pb-4">
           <CardTitle className="text-base">Extracted Requirements</CardTitle>
           <div className="flex flex-wrap gap-2">
             {groups.map((group) => (
@@ -200,19 +200,21 @@ export function RequirementsStatementsGroups({
             placeholder="Search requirement summary, source quote, or section..."
           />
         </CardHeader>
-        <CardContent className="space-y-3">
-          {activeGroup ? (
-            <p className="text-sm text-gray-600">
-              Showing <span className="font-medium">{activeGroup.category_label}</span> requirements (
-              {filteredItems.length} result{filteredItems.length === 1 ? '' : 's'})
-            </p>
-          ) : null}
-
-          {filteredItems.length === 0 ? (
-            <p className="text-sm text-gray-500">No statements found for this filter.</p>
-          ) : (
+        <CardContent className="flex min-h-0 flex-1 flex-col overflow-hidden p-0">
+          <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-6 pb-6 pt-0">
             <div className="space-y-3">
-              {visibleItems.map((statement) => (
+              {activeGroup ? (
+                <p className="text-sm text-gray-600">
+                  Showing <span className="font-medium">{activeGroup.category_label}</span> requirements (
+                  {filteredItems.length} result{filteredItems.length === 1 ? '' : 's'})
+                </p>
+              ) : null}
+
+              {filteredItems.length === 0 ? (
+                <p className="text-sm text-gray-500">No statements found for this filter.</p>
+              ) : (
+                <div className="space-y-3">
+                  {visibleItems.map((statement) => (
                 <details
                   key={statement.id}
                   className={`rounded-md border p-3 ${isMissed(statement.id) ? 'border-red-200 bg-red-50/60' : ''}`}
@@ -325,17 +327,19 @@ export function RequirementsStatementsGroups({
                     ) : null}
                   </div>
                 </details>
-              ))}
-            </div>
-          )}
+                  ))}
+                </div>
+              )}
 
-          {visibleCount < filteredItems.length ? (
-            <div className="pt-2">
-              <Button type="button" variant="outline" onClick={() => setVisibleCount((count) => count + 20)}>
-                Load 20 More
-              </Button>
+              {visibleCount < filteredItems.length ? (
+                <div className="pt-2">
+                  <Button type="button" variant="outline" onClick={() => setVisibleCount((count) => count + 20)}>
+                    Load 20 More
+                  </Button>
+                </div>
+              ) : null}
             </div>
-          ) : null}
+          </div>
         </CardContent>
       </Card>
     </div>

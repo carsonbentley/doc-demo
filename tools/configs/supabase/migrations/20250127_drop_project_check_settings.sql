@@ -1,11 +1,5 @@
--- Drop the trigger that's causing the error when creating organizations
-DROP TRIGGER IF EXISTS trigger_create_default_project_check_settings ON public.organizations;
-
--- Drop the function that the trigger was calling
-DROP FUNCTION IF EXISTS create_default_project_check_settings();
-
--- Drop tables related to the old requirements system since they're no longer needed
-DROP TABLE IF EXISTS public.project_check_settings CASCADE;
-DROP TABLE IF EXISTS public.project_disabled_checks CASCADE;
-DROP TABLE IF EXISTS public.requirement_results CASCADE;
-DROP TABLE IF EXISTS public.requirements CASCADE;
+-- Legacy migration superseded for greenfield installs.
+-- Effective application schema is defined in 20260323100000_defense_demo_baseline.sql
+-- and subsequent migrations. This file is retained so databases that already
+-- applied the historical version keep a consistent migration history.
+select 1;

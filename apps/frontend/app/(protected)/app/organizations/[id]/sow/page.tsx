@@ -230,6 +230,8 @@ export default function SowUploadPage() {
   const [viewerTarget, setViewerTarget] = useState<ViewerTarget | null>(null);
   const filesInputRef = useRef<HTMLInputElement | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
+  const viewerColumnRef = useRef<HTMLDivElement | null>(null);
+  const [viewerColumnHeight, setViewerColumnHeight] = useState<number | null>(null);
 
   useEffect(() => {
     if (!organizationId) return;
@@ -291,20 +293,10 @@ export default function SowUploadPage() {
         return false;
       }
 
-      const countsByDocId = new Map<string, number>();
-      for (const doc of docs) {
-        const countResult = await supabase
-          .from('requirements_chunks')
-          .select('id', { count: 'exact', head: true })
-          .eq('organization_id', organizationId)
-          .eq('requirements_document_id', doc.id);
-        countsByDocId.set(doc.id, countResult.count || 0);
-      }
-
       const preferredDoc =
         docs.find((doc) => {
           const procCandidate = doc.metadata?.processing_status ?? null;
-          const chunksCandidate = countsByDocId.get(doc.id) || 0;
+          const chunksCandidate = doc.metadata?.chunk_total ?? 0;
           return (
             procCandidate === 'indexing' ||
             procCandidate === 'distilling' ||
@@ -313,7 +305,7 @@ export default function SowUploadPage() {
           );
         }) || docs[0];
 
-      const chunkCount = countsByDocId.get(preferredDoc.id) || 0;
+      const chunkCount = preferredDoc.metadata?.chunk_total ?? 0;
       const metadata = preferredDoc.metadata ?? null;
       const chunkTotal = metadata?.chunk_total;
       const statementCount = metadata?.statement_count ?? 0;
@@ -365,13 +357,28 @@ export default function SowUploadPage() {
     void tick();
     const intervalId = setInterval(() => {
       void tick();
-    }, 1500);
+    }, 10000);
 
     return () => {
       cancelled = true;
       clearInterval(intervalId);
     };
   }, [organizationId, userId, status?.indexed, status?.latest_requirements_document_id]);
+
+  useEffect(() => {
+    const node = viewerColumnRef.current;
+    if (!node) return;
+
+    const updateHeight = () => {
+      const next = Math.round(node.getBoundingClientRect().height);
+      if (next > 0) setViewerColumnHeight(next);
+    };
+
+    updateHeight();
+    const observer = new ResizeObserver(updateHeight);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [linkedSections.length, status?.indexed, status?.statement_count, status?.chunk_count, statementGroups.length]);
 
   useEffect(() => {
     const shouldAutoIndex = searchParams.get('autoIndex') === '1';
@@ -804,7 +811,7 @@ export default function SowUploadPage() {
   );
 
   const requirementsListColumn = (
-    <div className="min-h-0 min-w-0">
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
       {status?.latest_requirements_document_id ? (
         <RequirementsStatementsGroups
           groups={statementGroups}
@@ -814,8 +821,8 @@ export default function SowUploadPage() {
           onViewCitationInDocument={hasLinkedSections ? handleViewCitationInDocument : undefined}
         />
       ) : (
-        <Card>
-          <CardContent className="py-6 text-sm text-gray-600">
+        <Card className="flex h-full max-h-full min-h-[min(40dvh,320px)] flex-col overflow-hidden rounded-xl">
+          <CardContent className="flex flex-1 items-center justify-center py-8 text-sm text-gray-600">
             Requirements statements will appear here as distillation progresses.
           </CardContent>
         </Card>
@@ -824,7 +831,7 @@ export default function SowUploadPage() {
   );
 
   const viewerColumn = (
-    <div className="flex h-full min-h-[min(65dvh,720px)] w-full min-w-0 flex-col lg:min-h-[calc(100dvh-14rem)]">
+    <div className="flex w-full min-w-0 flex-col">
       <RequirementsPdfViewer
         rawText={status?.latest_raw_text}
         pdfUrl={activeViewerPdfUrl}
@@ -1084,9 +1091,10 @@ export default function SowUploadPage() {
         </DialogContent>
       </Dialog>
 
+      <div className="w-full min-w-0">
       {hasLinkedSections ? (
-        <div className="min-h-[calc(100dvh-5.5rem)] w-full max-w-full overflow-x-hidden bg-gray-50/90 pb-16">
-          <div className="sticky top-0 z-30 border-b border-gray-200 bg-white/95 px-4 py-3 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/85 sm:px-6 lg:px-8">
+        <div className="w-full max-w-full overflow-x-hidden bg-gray-50/90">
+          <div className="sticky top-0 z-30 shrink-0 border-b border-gray-200 bg-white/95 px-4 py-3 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-white/85 sm:px-6 lg:px-8">
             <div className="mx-auto flex max-w-[1600px] flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="min-w-0">
                 <Button
@@ -1115,79 +1123,91 @@ export default function SowUploadPage() {
             </div>
           </div>
 
-          <div className="mx-auto max-w-[1600px] space-y-5 px-4 pt-5 sm:px-6 lg:px-8">
-            {indexing || !status?.indexed ? stepProgress : null}
+          <div className="mx-auto w-full max-w-[1600px] px-4 pb-6 pt-4 sm:px-6 lg:px-8">
+            <div className="shrink-0 space-y-4 pb-3">
+              {indexing || !status?.indexed ? stepProgress : null}
+              {error ? <div className="rounded-md bg-red-50 p-3 text-sm text-red-700">{error}</div> : null}
+
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-3">
+                <div className="min-w-0 flex-1">{linkInternalDocsPanel}</div>
+                <div className="min-w-0 flex-1">{requirementsDocumentPanel}</div>
+              </div>
+
+              {statementRowTotal > 0 ? (
+                <div className="flex flex-wrap items-baseline gap-x-8 gap-y-2 rounded-lg border border-gray-200 bg-white px-4 py-3 text-sm shadow-sm">
+                  <div>
+                    <span className="text-gray-500">Test coverage </span>
+                    <span className="text-lg font-semibold tabular-nums text-gray-900">{coveragePct}%</span>
+                  </div>
+                  <div>
+                    <span className="text-gray-500">Total </span>
+                    <span className="font-semibold tabular-nums text-gray-900">{statementRowTotal}</span>
+                  </div>
+                  <div>
+                    <span className="text-emerald-700">Linked </span>
+                    <span className="font-semibold tabular-nums text-emerald-900">{linkedRequirementCount}</span>
+                  </div>
+                  <div>
+                    <span className="text-red-700">Missed </span>
+                    <span className="font-semibold tabular-nums text-red-800">{missedRequirementCount}</span>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="grid min-h-0 min-w-0 grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1.72fr)_minmax(0,1fr)] lg:items-stretch lg:gap-6">
+              <div ref={viewerColumnRef} className="flex min-h-0 min-w-0 flex-col">{viewerColumn}</div>
+              <div
+                className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
+                style={viewerColumnHeight ? { height: `${viewerColumnHeight}px` } : undefined}
+              >
+                {requirementsListColumn}
+              </div>
+            </div>
+
+            <p className="shrink-0 border-t border-gray-200 pt-3 text-xs text-gray-500">
+              Links are saved automatically. Open <span className="font-medium">View History</span> to browse past document uploads.
+            </p>
+          </div>
+        </div>
+      ) : (
+        <div className="w-full max-w-full overflow-x-hidden">
+          <div className="shrink-0 space-y-5 px-4 pb-4 pt-2 sm:px-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <Button variant="ghost" onClick={() => router.push(`/app/organizations/${organizationId}/requirements`)} className="mb-2">
+                  <ArrowLeft className="mr-2 h-4 w-4" />
+                  Back to Requirements Setup
+                </Button>
+                <h1 className="text-3xl font-bold">Document Upload and Linking</h1>
+                <p className="text-sm text-gray-600">Step 2: Upload documents and generate saved section links.</p>
+              </div>
+              <Button variant="outline" onClick={() => router.push(`/app/organizations/${organizationId}/history`)}>
+                View History
+              </Button>
+            </div>
+
+            {stepProgress}
             {error ? <div className="rounded-md bg-red-50 p-3 text-sm text-red-700">{error}</div> : null}
 
             <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-3">
               <div className="min-w-0 flex-1">{linkInternalDocsPanel}</div>
               <div className="min-w-0 flex-1">{requirementsDocumentPanel}</div>
             </div>
-
-            {statementRowTotal > 0 ? (
-              <div className="flex flex-wrap items-baseline gap-x-8 gap-y-2 rounded-lg border border-gray-200 bg-white px-4 py-3 text-sm shadow-sm">
-                <div>
-                  <span className="text-gray-500">Test coverage </span>
-                  <span className="text-lg font-semibold tabular-nums text-gray-900">{coveragePct}%</span>
-                </div>
-                <div>
-                  <span className="text-gray-500">Total </span>
-                  <span className="font-semibold tabular-nums text-gray-900">{statementRowTotal}</span>
-                </div>
-                <div>
-                  <span className="text-emerald-700">Linked </span>
-                  <span className="font-semibold tabular-nums text-emerald-900">{linkedRequirementCount}</span>
-                </div>
-                <div>
-                  <span className="text-red-700">Missed </span>
-                  <span className="font-semibold tabular-nums text-red-800">{missedRequirementCount}</span>
-                </div>
-              </div>
-            ) : null}
-
-            <div className="grid min-h-0 grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1.72fr)_minmax(0,1fr)] lg:items-start lg:gap-6">
-              <div className="min-w-0">{viewerColumn}</div>
-              <div className="min-h-0 min-w-0 lg:max-h-[calc(100dvh-14rem)] lg:overflow-y-auto lg:overflow-x-hidden lg:pr-1">
-                {requirementsListColumn}
-              </div>
-            </div>
-            <p className="border-t border-gray-200 pt-5 text-sm text-gray-500">
-              Links are saved automatically. Open <span className="font-medium">View History</span> to browse past document uploads.
-            </p>
-          </div>
-        </div>
-      ) : (
-        <div className="w-full max-w-full space-y-5 overflow-x-hidden px-4 pb-10 sm:px-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <Button variant="ghost" onClick={() => router.push(`/app/organizations/${organizationId}/requirements`)} className="mb-2">
-                <ArrowLeft className="mr-2 h-4 w-4" />
-                Back to Requirements Setup
-              </Button>
-              <h1 className="text-3xl font-bold">Document Upload and Linking</h1>
-              <p className="text-sm text-gray-600">Step 2: Upload documents and generate saved section links.</p>
-            </div>
-            <Button variant="outline" onClick={() => router.push(`/app/organizations/${organizationId}/history`)}>
-              View History
-            </Button>
           </div>
 
-          {stepProgress}
-          {error ? <div className="rounded-md bg-red-50 p-3 text-sm text-red-700">{error}</div> : null}
-
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-3">
-            <div className="min-w-0 flex-1">{linkInternalDocsPanel}</div>
-            <div className="min-w-0 flex-1">{requirementsDocumentPanel}</div>
-          </div>
-
-          <div className="grid min-h-0 grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1.72fr)_minmax(0,1fr)] lg:items-start lg:gap-6">
-            <div className="min-w-0">{viewerColumn}</div>
-            <div className="min-h-0 min-w-0 lg:max-h-[calc(100dvh-14rem)] lg:overflow-y-auto lg:overflow-x-hidden lg:pr-1">
+          <div className="grid min-h-0 min-w-0 grid-cols-1 gap-4 px-4 pb-8 sm:px-6 lg:grid-cols-[minmax(0,1.72fr)_minmax(0,1fr)] lg:items-stretch lg:gap-6">
+            <div ref={viewerColumnRef} className="flex min-h-0 min-w-0 flex-col">{viewerColumn}</div>
+            <div
+              className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
+              style={viewerColumnHeight ? { height: `${viewerColumnHeight}px` } : undefined}
+            >
               {requirementsListColumn}
             </div>
           </div>
         </div>
       )}
+      </div>
 
       <Dialog open={sowSettingsOpen} onOpenChange={setSowSettingsOpen}>
         <DialogContent className="sm:max-w-md">

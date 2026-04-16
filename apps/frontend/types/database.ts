@@ -245,6 +245,75 @@ export type Database = {
           },
         ]
       }
+      requirements_statements: {
+        Row: {
+          created_at: string
+          id: string
+          metadata: Json
+          modal_verb: string
+          note_text: string | null
+          organization_id: string
+          requirements_document_id: string
+          section_title: string
+          source_block_type: string | null
+          source_page: number | null
+          statement_order: number
+          statement_text: string
+          statement_text_normalized: string
+          text_anchor: Json | null
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          metadata?: Json
+          modal_verb: string
+          note_text?: string | null
+          organization_id: string
+          requirements_document_id: string
+          section_title: string
+          source_block_type?: string | null
+          source_page?: number | null
+          statement_order: number
+          statement_text: string
+          statement_text_normalized: string
+          text_anchor?: Json | null
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          metadata?: Json
+          modal_verb?: string
+          note_text?: string | null
+          organization_id?: string
+          requirements_document_id?: string
+          section_title?: string
+          source_block_type?: string | null
+          source_page?: number | null
+          statement_order?: number
+          statement_text?: string
+          statement_text_normalized?: string
+          text_anchor?: Json | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "requirements_statements_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "requirements_statements_requirements_document_id_fkey"
+            columns: ["requirements_document_id"]
+            isOneToOne: false
+            referencedRelation: "requirements_documents"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       section_requirement_links: {
         Row: {
           created_at: string
